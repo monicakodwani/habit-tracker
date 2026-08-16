@@ -45,7 +45,7 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-type Kind = 'nudge' | 'at_risk' | 'reaction'
+type Kind = 'nudge' | 'at_risk' | 'reaction' | 'test'
 
 interface Payload {
   title: string
@@ -54,12 +54,19 @@ interface Payload {
   url: string
 }
 
-/** Which preference column gates each kind of notification. */
-const PREF_COLUMN: Record<Kind, 'nudges' | 'at_risk' | 'reactions'> = {
+/**
+ * Which preference column gates each kind of notification.
+ *
+ * `test` is deliberately absent: it goes only to the person who asked for it, and
+ * silently honouring a preference would defeat the point of a diagnostic.
+ */
+const PREF_COLUMN: Record<Exclude<Kind, 'test'>, 'nudges' | 'at_risk' | 'reactions'> = {
   nudge: 'nudges',
   at_risk: 'at_risk',
   reaction: 'reactions',
 }
+
+const KINDS: Kind[] = ['nudge', 'at_risk', 'reaction', 'test']
 
 const DEFAULT_PREFS = {
   nudges: true,
@@ -106,7 +113,8 @@ Deno.serve(async (req) => {
 
     stage = 'parse'
     const { kind, id } = (await req.json()) as { kind?: Kind; id?: string }
-    if (!kind || !id || !(kind in PREF_COLUMN)) return json({ error: 'Bad request' }, 400)
+    if (!kind || !KINDS.includes(kind)) return json({ error: 'Bad request' }, 400)
+    if (kind !== 'test' && !id) return json({ error: 'Bad request' }, 400)
 
     /*
      * VAPID is configured only after the caller is authenticated and their request
@@ -130,11 +138,11 @@ Deno.serve(async (req) => {
     }
 
     const { recipients, payload } = resolved
-    if (recipients.length === 0) return json({ sent: 0 })
+    if (recipients.length === 0) return json({ sent: 0, devices: 0 })
 
     stage = 'deliver'
-    const sent = await deliver(admin, kind, recipients, payload)
-    return json({ sent })
+    const result = await deliver(admin, kind, recipients, payload)
+    return json(result)
   } catch (cause) {
     // Never log subscription keys or tokens — only the message and the stage.
     console.error('[send-push]', stage, cause instanceof Error ? cause.message : 'unknown error')
@@ -163,6 +171,28 @@ async function resolve(
   id: string,
   callerId: string,
 ): Promise<{ recipients: string[]; payload: Omit<Payload, 'body'> & { habit: string; body: string } } | null> {
+  /*
+   * A diagnostic the user can fire at themselves from Me → Notifications.
+   *
+   * Safe by construction: the only recipient is the caller, so it cannot be used to
+   * push anything at anyone else. It exists because "no notification arrived" has
+   * half a dozen possible causes — no subscription stored, a VAPID mismatch, a
+   * preference switched off, an expired endpoint — and without a way to test alone
+   * you cannot tell them apart.
+   */
+  if (kind === 'test') {
+    return {
+      recipients: [callerId],
+      payload: {
+        title: '🔔 Notifications are working',
+        habit: 'this test',
+        body: 'Sent from your own device.',
+        tag: 'habits-test',
+        url: '#/me',
+      },
+    }
+  }
+
   if (kind === 'nudge') {
     const { data: nudge } = await admin
       .from('nudges')
@@ -276,31 +306,47 @@ async function deliver(
   kind: Kind,
   recipients: string[],
   payload: Omit<Payload, 'body'> & { habit: string; body: string },
-): Promise<number> {
+): Promise<{ sent: number; devices: number; muted: number; expired: number; failed: number; lastError?: string }> {
   let sent = 0
+  let devices = 0
+  let muted = 0
+  let expired = 0
+  let failed = 0
+  let lastError: string | undefined
 
   for (const userId of recipients) {
-    const { data: prefsRow } = await admin
-      .from('notification_prefs')
-      .select('nudges, at_risk, reactions, show_habit_names')
-      .eq('user_id', userId)
-      .maybeSingle()
+    // A test always goes through; everything else respects the recipient's settings.
+    if (kind !== 'test') {
+      const { data: prefsRow } = await admin
+        .from('notification_prefs')
+        .select('nudges, at_risk, reactions, show_habit_names')
+        .eq('user_id', userId)
+        .maybeSingle()
 
-    const prefs = prefsRow ?? DEFAULT_PREFS
-    if (!prefs[PREF_COLUMN[kind]]) continue
+      const prefs = prefsRow ?? DEFAULT_PREFS
+      if (!prefs[PREF_COLUMN[kind]]) {
+        muted += 1
+        continue
+      }
+      payload = { ...payload, habit: prefs.show_habit_names ? payload.habit : 'a habit' }
+    }
 
-    const subject = prefs.show_habit_names ? payload.habit : 'a habit'
+    const subject = payload.habit
     const body =
-      kind === 'nudge'
-        ? `${subject} — “${payload.body}”`
-        : kind === 'at_risk'
-          ? `${subject} ${payload.body}`
-          : `${payload.body}: ${subject}`
+      kind === 'test'
+        ? payload.body
+        : kind === 'nudge'
+          ? `${subject} — “${payload.body}”`
+          : kind === 'at_risk'
+            ? `${subject} ${payload.body}`
+            : `${payload.body}: ${subject}`
 
     const { data: subs } = await admin
       .from('push_subscriptions')
       .select('id, endpoint, p256dh, auth')
       .eq('user_id', userId)
+
+    devices += (subs ?? []).length
 
     for (const sub of subs ?? []) {
       try {
@@ -315,12 +361,18 @@ async function deliver(
         if (status === 404 || status === 410) {
           // The browser threw this subscription away; stop trying forever.
           await admin.from('push_subscriptions').delete().eq('id', sub.id)
+          expired += 1
         } else {
+          failed += 1
+          // A 401/403 here almost always means the VAPID key pair the server signs
+          // with is not the one the browser subscribed against. Surfaced (as a status
+          // code only, never key material) because it is otherwise invisible.
+          lastError = `push service returned ${status ?? 'an unknown error'}`
           console.error('[send-push] delivery failed', status ?? 'unknown')
         }
       }
     }
   }
 
-  return sent
+  return { sent, devices, muted, expired, failed, ...(lastError ? { lastError } : {}) }
 }

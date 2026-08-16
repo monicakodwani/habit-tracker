@@ -29,6 +29,7 @@ custom server.
 - [Semantics that are easy to get wrong](#semantics-that-are-easy-to-get-wrong)
 - [Security model](#security-model)
 - [Design decisions](#design-decisions)
+- [Diagnosing push](#diagnosing-push)
 - [Installing on an iPhone](#installing-on-an-iphone)
 - [Known limitations](#known-limitations)
 - [Not built](#not-built)
@@ -536,6 +537,24 @@ redirect configuration, and does not depend on a link opening in the same browse
 which on iOS is a real source of friction.
 
 ---
+
+## Diagnosing push
+
+**Me → Notifications → Send a test** pushes a notification to your own devices and
+reports what actually happened. It is the fastest way to tell apart the causes that
+all look identical from the outside:
+
+| It says | What it means |
+| --- | --- |
+| Sent to N devices | Working. If nothing appears, the OS is suppressing it — check Focus/Do Not Disturb. |
+| No devices are registered | The subscription was never stored. Turn notifications off and on again. |
+| The push service rejected it | Almost always a VAPID mismatch: the key the server signs with is not the one the app was built with. |
+| Subscription had expired | The browser rotated it. Turn notifications off and on again. |
+| The server has no VAPID keys | `supabase secrets set` was not run, or the function was not redeployed after. |
+
+Because `supabase secrets list` only shows digests, a VAPID mismatch cannot be checked
+by eye. The reliable fix is to set both halves from the *same* `npm run vapid` output,
+redeploy the function, and confirm the public half matches the one in the built bundle.
 
 ## Installing on an iPhone
 

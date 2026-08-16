@@ -25,9 +25,11 @@ import {
 import {
   DEFAULT_PREFS,
   deletePushSubscription,
+  describePushResult,
   fetchNotificationPrefs,
   savePushSubscription,
   saveNotificationPrefs,
+  sendTestPush,
 } from '../services/notifications'
 import { describeError } from '../lib/supabase'
 import { useToast } from './Toast'
@@ -42,6 +44,7 @@ export function NotificationSettings({ userId }: { userId: string }) {
   const [subscribed, setSubscribed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   useEffect(() => {
     let active = true
@@ -94,6 +97,34 @@ export function NotificationSettings({ userId }: { userId: string }) {
     }
   }
 
+  /**
+   * Fires a notification at the user's own devices and reports what happened.
+   *
+   * Deliberately re-saves the subscription first: the commonest cause of silence is a
+   * browser subscription that exists locally but was never stored (or was stored under
+   * an endpoint the browser has since rotated), and this repairs that case rather than
+   * just reporting it.
+   */
+  async function test() {
+    setBusy(true)
+    setTestResult(null)
+    try {
+      const subscription = await currentSubscription()
+      if (subscription) {
+        await savePushSubscription(userId, subscriptionKeys(subscription))
+      }
+      const result = await sendTestPush()
+      setTestResult({ ok: result.sent > 0, message: describePushResult(result) })
+    } catch (cause) {
+      setTestResult({
+        ok: false,
+        message: cause instanceof Error ? cause.message : describeError(cause),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function disable() {
     setBusy(true)
     try {
@@ -124,11 +155,28 @@ export function NotificationSettings({ userId }: { userId: string }) {
                 You&rsquo;ll get a lock-screen alert on this device when your friends nudge
                 you or ask for help.
               </p>
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="secondary" disabled={busy} onClick={() => void test()}>
+                  {busy ? 'Sending…' : 'Send a test'}
+                </Button>
                 <Button variant="quiet" disabled={busy} onClick={() => void disable()}>
                   Turn off on this device
                 </Button>
               </div>
+              {/*
+                The result of a test is shown inline rather than as a toast: it can be
+                two sentences long and is worth reading, not glancing at.
+              */}
+              {testResult && (
+                <p
+                  role="status"
+                  className={`mt-3 text-[0.8rem] leading-relaxed ${
+                    testResult.ok ? 'text-accent-ink' : 'text-danger'
+                  }`}
+                >
+                  {testResult.message}
+                </p>
+              )}
             </>
           ) : (
             <>
