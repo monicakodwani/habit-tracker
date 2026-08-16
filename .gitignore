@@ -1,0 +1,32 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment files. NEVER commit a real one — see .env.example for the template and
+# the README for which values are safe to expose in the browser.
+.env
+.env.*
+!.env.example
+
+# Supabase CLI local state (local containers, generated keys, temp files)
+supabase/.branches
+supabase/.temp
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

@@ -1,0 +1,168 @@
+@import 'tailwindcss';
+
+/*
+ * Palette. Deliberately muted and warm — paper-ish in light mode, ink-ish in dark.
+ * Colours live as plain custom properties so the dark scheme can swap them, then get
+ * mapped into Tailwind's theme with `@theme inline` to generate `bg-surface`, `text-ink`, etc.
+ */
+:root {
+  color-scheme: light dark;
+
+  --c-bg: #faf7f2;
+  --c-surface: #fffdfa;
+  --c-surface-sunken: #f2ede5;
+  --c-line: #e4ddd2;
+  --c-ink: #2c2823;
+  --c-ink-soft: #6d655b;
+  --c-ink-faint: #988f83;
+  --c-accent: #66714f;
+  --c-accent-soft: #e6ead9;
+  --c-accent-ink: #4c5539;
+  --c-danger: #9d4b3c;
+  --c-danger-soft: #f6e4e0;
+  --c-flame: #b9663a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg: #16151a;
+    --c-surface: #201f26;
+    --c-surface-sunken: #2a2831;
+    --c-line: #35333d;
+    --c-ink: #ece8e2;
+    --c-ink-soft: #a9a39b;
+    --c-ink-faint: #7d776f;
+    --c-accent: #a9b98a;
+    --c-accent-soft: #313627;
+    --c-accent-ink: #c3d0a6;
+    --c-danger: #e0897a;
+    --c-danger-soft: #3a2723;
+    --c-flame: #d98d5c;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-sunken: var(--c-surface-sunken);
+  --color-line: var(--c-line);
+  --color-ink: var(--c-ink);
+  --color-ink-soft: var(--c-ink-soft);
+  --color-ink-faint: var(--c-ink-faint);
+  --color-accent: var(--c-accent);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-ink: var(--c-accent-ink);
+  --color-danger: var(--c-danger);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-flame: var(--c-flame);
+
+  --font-sans:
+    ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
+    sans-serif;
+}
+
+/*
+ * These MUST live inside `@layer base`.
+ *
+ * Tailwind v4 emits its utilities inside `@layer utilities`, and in the CSS cascade
+ * an unlayered rule beats a layered one no matter how low its specificity. An
+ * unlayered `button { color: inherit }` would therefore silently override every
+ * `text-*` utility on every button in the app. Declaring these as base styles keeps
+ * them as defaults that utilities can override, which is what they are meant to be.
+ */
+@layer base {
+  html {
+    /* Keeps the pull-to-refresh / overscroll area the same colour as the app. */
+    background-color: var(--c-bg);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--c-bg);
+    color: var(--c-ink);
+    font-family: var(--font-sans);
+    /* The layout is a single column capped at ~28rem; nothing scrolls sideways. */
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Visible, consistent focus ring for keyboard users on every interactive element. */
+  :focus-visible {
+    outline: 2px solid var(--c-accent);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+    /* Removes the 300ms tap delay and the grey flash on iOS Safari. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /*
+   * iOS zooms the page in when a focused input has a font-size below 16px.
+   * Enforcing 16px on every text control keeps forms usable with the software
+   * keyboard; an explicit `text-*` utility can still opt a field out.
+   */
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+    font-size: 16px;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* A brief, quiet acknowledgement when a habit is checked off — no confetti. */
+@keyframes check-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

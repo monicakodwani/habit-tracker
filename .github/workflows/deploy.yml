@@ -1,0 +1,79 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Lets you re-deploy from the Actions tab without pushing a commit.
+  workflow_dispatch:
+
+# Least privilege: read the repo, write a Pages deployment, and prove the job's
+# identity to the Pages service. Nothing else.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# If two pushes land close together, let the newer one finish and skip the older —
+# but never cancel a deployment that has already started.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # A broken build should never reach the three of us as a white screen.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        env:
+          # GitHub Pages serves the site from https://<owner>.github.io/<repo>/, so
+          # Vite needs that prefix for its asset URLs. Derived from the repository
+          # name rather than hard-coded, so renaming or forking the repo just works.
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          # These are the PUBLIC Supabase URL and anon key. They are compiled into the
+          # bundle and are visible to anyone who views source — that is expected and
+          # safe, because Row Level Security is what enforces access, not secrecy.
+          # They live in repository secrets only to keep the project URL out of the
+          # public repo, NOT because exposure would be a vulnerability.
+          #
+          # NEVER add the service-role key here. It bypasses RLS entirely.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY repository secrets."
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

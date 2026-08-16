@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover so the layout can pad around the iPhone home indicator / notch -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Habits</title>
+    <meta name="description" content="A small shared habit space for a few friends." />
+
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+
+    <!-- Add to Home Screen (iOS Safari) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Habits" />
+
+    <!-- Match the app background in both schemes so the browser chrome blends in -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf7f2" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#16151a" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
