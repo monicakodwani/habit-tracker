@@ -106,20 +106,17 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
         let profile = existingProfile
         if (!profile) {
-          // The `on_auth_user_created` trigger normally creates this row, so getting
-          // here means either the account predates the migration — which we can fix
-          // by creating it — or the session outlived the account it refers to, which
-          // we cannot. The insert distinguishes them: a foreign key to auth.users
-          // fails in the second case.
+          // The `on_auth_user_created` trigger normally creates this row, so reaching
+          // here means the account predates the migration — which creating it fixes.
           try {
             profile = await ensureProfile(user.id, {
               display_name: defaultDisplayName(user.email),
               timezone: guessTimezone(),
             })
-          } catch {
+          } catch (cause) {
             if (token !== loadToken.current) return
             setStatus('error')
-            setError('This session is no longer valid. Sign out and sign in again.')
+            setError(diagnoseMissingProfile(cause))
             return
           }
           if (token !== loadToken.current) return
@@ -300,6 +297,32 @@ export function useAppData(): AppDataValue {
 function defaultDisplayName(email: string | undefined): string {
   const local = email?.split('@')[0]?.trim()
   return local && local.length > 0 ? local.slice(0, 40) : 'Friend'
+}
+
+/**
+ * Explains why a profile could neither be read nor created.
+ *
+ * The two causes look identical from the UI but mean opposite things, and saying the
+ * wrong one sends whoever is debugging in entirely the wrong direction:
+ *
+ *   - 23505, unique/primary key violation — the row exists but the SELECT policy is
+ *     not returning it to its own owner. A policy problem, not a session problem.
+ *   - 23503, foreign key violation — there is no auth.users row, so the session
+ *     refers to an account that no longer exists.
+ */
+function diagnoseMissingProfile(cause: unknown): string {
+  const code =
+    typeof cause === 'object' && cause !== null && 'code' in cause
+      ? String((cause as { code: unknown }).code)
+      : ''
+
+  if (code === '23505') {
+    return 'Your profile exists but is not readable by your own account. This is a database policy problem — check that the latest migration in supabase/migrations has been applied.'
+  }
+  if (code === '23503') {
+    return 'This session is no longer valid. Sign out and sign in again.'
+  }
+  return describeError(cause)
 }
 
 /**

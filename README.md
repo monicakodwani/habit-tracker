@@ -73,13 +73,17 @@ need it for this app, but you will want it eventually.
 
 ### 2. Run the migration
 
-In the Supabase dashboard, open **SQL Editor → New query**, paste the entire contents
-of [`supabase/migrations/20260816000000_init.sql`](supabase/migrations/20260816000000_init.sql),
-and run it.
+In the Supabase dashboard, open **SQL Editor → New query** and run the files in
+`supabase/migrations/` **in filename order**, one at a time:
 
-That single file is the complete database: tables, constraints, indexes, triggers, RLS
-policies, grants, and realtime setup. It is the whole schema, not a fragment — running
-it on a fresh project is all the database setup there is.
+1. [`20260816000000_init.sql`](supabase/migrations/20260816000000_init.sql) — the whole
+   schema: tables, constraints, indexes, triggers, RLS policies, grants, realtime.
+2. [`20260816213000_fix_own_profile_visibility.sql`](supabase/migrations/20260816213000_fix_own_profile_visibility.sql)
+   — lets a user read their own profile before they belong to a group. Without it,
+   every brand new account fails on first sign-in.
+
+Together these are the complete database, not fragments. Running them on a fresh
+project is all the database setup there is.
 
 > Using the Supabase CLI instead? `supabase db push` picks the migration up
 > automatically.

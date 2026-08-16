@@ -282,6 +282,71 @@ select assert_eq((select count(*)::int from public.groups), 1,
   'an unrelated account sees only their own group');
 
 -- ----------------------------------------------------------------------------
+-- Nova — signed up, but not yet in ANY group.
+--
+-- This is the state every real user is in between signing up and an admin running
+-- bootstrap.sql, so it is the very first thing a new account experiences.
+--
+-- The original policy set missed it entirely: every fixture user above belongs to
+-- some group, including the "stranger" Zed, so nothing exercised the group-less
+-- case. The result was that a brand new account could not read its own profile —
+-- `shares_group_with` joins group_members to itself, which yields nothing when the
+-- caller has no membership rows, even for their own id.
+-- ----------------------------------------------------------------------------
+
+reset role;
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('44444444-4444-4444-4444-444444444444', 'nova@example.test', '{"display_name":"Nova"}');
+
+set role authenticated;
+select act_as('44444444-4444-4444-4444-444444444444');
+
+select assert_eq((select count(*)::int from public.profiles), 1,
+  'a user in NO group can still read their own profile');
+select assert_eq((select display_name from public.profiles), 'Nova',
+  'and it is their own profile, not somebody else''s');
+
+-- Everything else must still be empty: being group-less grants nothing extra.
+select assert_eq((select count(*)::int from public.groups), 0,
+  'a group-less user sees no groups');
+select assert_eq((select count(*)::int from public.group_members), 0,
+  'a group-less user sees no memberships');
+select assert_eq((select count(*)::int from public.habits), 0,
+  'a group-less user sees no habits');
+select assert_eq((select count(*)::int from public.habit_checkins), 0,
+  'a group-less user sees no check-ins');
+
+-- They can edit their own profile (the Me screen must work before joining a group).
+update public.profiles set display_name = 'Nova B.'
+  where id = '44444444-4444-4444-4444-444444444444';
+select assert_eq((select display_name from public.profiles), 'Nova B.',
+  'a group-less user can edit their own profile');
+
+-- And still cannot reach anyone else's, by id or otherwise.
+select assert_eq(
+  (select count(*)::int from public.profiles
+   where id = '11111111-1111-1111-1111-111111111111'), 0,
+  'a group-less user cannot read another person''s profile by id');
+
+update public.profiles set display_name = 'Hijacked'
+  where id = '11111111-1111-1111-1111-111111111111';
+reset role;
+select assert_eq((select count(*)::int from public.profiles where display_name = 'Hijacked'), 0,
+  'a group-less user cannot edit another person''s profile');
+set role authenticated;
+
+-- Two group-less users must not see each other.
+reset role;
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('55555555-5555-5555-5555-555555555555', 'quinn@example.test', '{"display_name":"Quinn"}');
+set role authenticated;
+select act_as('55555555-5555-5555-5555-555555555555');
+select assert_eq((select count(*)::int from public.profiles), 1,
+  'two group-less users cannot see each other');
+select assert_eq((select display_name from public.profiles), 'Quinn',
+  'each group-less user sees only themselves');
+
+-- ----------------------------------------------------------------------------
 -- Anonymous — a request with no valid JWT
 -- ----------------------------------------------------------------------------
 
