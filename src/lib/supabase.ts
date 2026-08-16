@@ -64,6 +64,21 @@ export function describeError(error: unknown): string {
   if (message.includes('row-level security')) {
     return 'You do not have permission to do that.'
   }
+  /*
+   * The frontend deploys independently of the database, so a push can land before
+   * the matching migration has been run in the Supabase dashboard. Postgres reports
+   * that as "column ... does not exist" / "relation ... does not exist", which is
+   * accurate but sends you looking in the wrong place. Name the actual fix.
+   */
+  if (/does not exist|schema cache|PGRST20[0-9]/.test(message)) {
+    return 'The database is missing a migration. Run the files in supabase/migrations (in filename order) in the Supabase SQL editor, then reload.'
+  }
+  if (message.includes('already nudged this recently')) {
+    return 'You already nudged this one recently.'
+  }
+  if (message.includes('Not allowed right now')) {
+    return 'You can’t nudge that right now.'
+  }
   if (message.includes('Invalid login credentials')) {
     return 'That email and password do not match an account.'
   }
