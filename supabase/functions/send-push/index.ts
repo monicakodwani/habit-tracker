@@ -25,8 +25,16 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3.6.7'
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
+/*
+ * Supabase injects the service-role key automatically, but the variable has been
+ * named differently across project vintages. Take whichever is present rather than
+ * assuming one — a missing key here surfaces as an opaque 500 from deep inside the
+ * client constructor, which is a miserable thing to debug.
+ */
+const SERVICE_ROLE_KEY =
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SECRET_KEY') ?? ''
+
 const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') ?? ''
 const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') ?? ''
 const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') ?? 'mailto:habits@example.com'
@@ -63,29 +71,56 @@ const DEFAULT_PREFS = {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
+  // Names the stage that failed, so a 500 says *where* without revealing anything.
+  let stage = 'init'
+
   try {
+    if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+      return json({ error: 'Server misconfigured', stage: 'env' }, 500)
+    }
+
+    stage = 'auth'
+    const authHeader = req.headers.get('Authorization') ?? ''
+    if (!authHeader.startsWith('Bearer ')) return json({ error: 'Unauthorized' }, 401)
+    const token = authHeader.slice('Bearer '.length)
+
+    /*
+     * One client, service-role, used for two distinct jobs:
+     *
+     *   - `getUser(token)` validates the caller's JWT and tells us who they are.
+     *     Passing the token explicitly means this does NOT depend on the anon key
+     *     being present in the environment, which is one fewer thing to get wrong.
+     *   - reading push_subscriptions, which no user may read for anyone else.
+     *
+     * Authorisation is never delegated to RLS here — every path below explicitly
+     * checks that the caller is the actor of the row they named.
+     */
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+
+    const { data: userData } = await admin.auth.getUser(token)
+    const caller = userData?.user
+    // An anon key is a valid JWT but not a user, so this is also what rejects it.
+    if (!caller) return json({ error: 'Unauthorized' }, 401)
+
+    stage = 'parse'
+    const { kind, id } = (await req.json()) as { kind?: Kind; id?: string }
+    if (!kind || !id || !(kind in PREF_COLUMN)) return json({ error: 'Bad request' }, 400)
+
+    /*
+     * VAPID is configured only after the caller is authenticated and their request
+     * validated. Doing it first meant a key problem produced a 500 for everyone,
+     * masking ordinary 401s and making the whole function look broken.
+     */
+    stage = 'vapid'
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-      // Not an error the user should see: the app works fine without push.
+      // Not an error worth surfacing: the app works fine without push.
       return json({ sent: 0, skipped: 'vapid-not-configured' })
     }
     webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
 
-    const authHeader = req.headers.get('Authorization') ?? ''
-    if (!authHeader.startsWith('Bearer ')) return json({ error: 'Unauthorized' }, 401)
-
-    // Two clients, on purpose. `asCaller` resolves who is asking, under their own
-    // RLS. `admin` reads push subscriptions, which no user may read for anyone else.
-    const asCaller = createClient(SUPABASE_URL, Deno.env.get('SUPABASE_ANON_KEY')!, {
-      global: { headers: { Authorization: authHeader } },
-    })
-    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
-
-    const { data: userData } = await asCaller.auth.getUser()
-    const caller = userData?.user
-    if (!caller) return json({ error: 'Unauthorized' }, 401)
-
-    const { kind, id } = (await req.json()) as { kind?: Kind; id?: string }
-    if (!kind || !id || !(kind in PREF_COLUMN)) return json({ error: 'Bad request' }, 400)
+    stage = 'resolve'
 
     const resolved = await resolve(admin, kind, id, caller.id)
     if (!resolved) {
@@ -97,12 +132,13 @@ Deno.serve(async (req) => {
     const { recipients, payload } = resolved
     if (recipients.length === 0) return json({ sent: 0 })
 
+    stage = 'deliver'
     const sent = await deliver(admin, kind, recipients, payload)
     return json({ sent })
   } catch (cause) {
-    // Never log subscription keys or tokens.
-    console.error('[send-push]', cause instanceof Error ? cause.message : 'unknown error')
-    return json({ error: 'Internal error' }, 500)
+    // Never log subscription keys or tokens — only the message and the stage.
+    console.error('[send-push]', stage, cause instanceof Error ? cause.message : 'unknown error')
+    return json({ error: 'Internal error', stage }, 500)
   }
 })
 
