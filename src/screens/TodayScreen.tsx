@@ -19,7 +19,7 @@ import { formatLongDate } from '../domain/dates'
 import { describeDailyProgress } from '../domain/recurrence'
 import { describeNudgeBlock, nudgeAvailability } from '../domain/nudges'
 import type { Habit, Profile } from '../types/models'
-import { Card, Screen, Section } from '../components/Layout'
+import { Card, Columns, PageTitle, Screen, Section } from '../components/Layout'
 import { ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 import { FriendHabitRow, OwnHabitRow } from '../components/HabitRow'
 import { HabitActionSheet } from '../components/HabitActionSheet'
@@ -61,53 +61,59 @@ export function TodayScreen() {
 
   return (
     <Screen>
-      <header className="mb-7">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">
-          {formatLongDate(today, zone)}
-        </h1>
-      </header>
+      <PageTitle>{formatLongDate(today, zone)}</PageTitle>
 
-      <Section title="You">
-        {status === 'loading' || !mine ? (
-          <ListSkeleton rows={3} />
-        ) : mine.items.length === 0 ? (
-          <NothingDueForYou hasAnyHabits={habits.some((h) => h.owner_id === me?.id)} />
-        ) : (
-          <>
-            <Card className="px-4">
-              <ul>
-                {mine.items.map((item) => (
-                  <OwnHabitRow
-                    key={item.habit.id}
-                    status={item}
-                    onToggle={() => void toggleCheckin(item.habit, today, item.completedToday)}
-                    onOpenActions={() => setActionsFor(item)}
-                  />
-                ))}
-              </ul>
-            </Card>
-            <p className="mt-3 px-1 text-[0.85rem] text-ink-faint">
-              {describeDailyProgress(mine.completedCount, mine.totalCount)}
-            </p>
-          </>
-        )}
-      </Section>
-
-      {status === 'ready' && theirs.length > 0 && (
-        <Section title="Your people">
-          <div className="space-y-3">
-            {theirs.map((person) => (
-              <FriendCard
-                key={person.profile.id}
-                person={person}
-                viewerId={me?.id ?? ''}
-                sentNudges={sentNudges}
-                onNudge={(habit) => setNudgeTarget({ habit, person: person.profile })}
-              />
-            ))}
-          </div>
+      {/*
+        Stacked on a phone exactly as before — You, then Your people. On desktop the
+        two become columns, with yours a little wider because its rows carry the
+        controls. Deliberately not a comparison: the two sides show different things
+        and neither is scored against the other.
+      */}
+      <Columns ratio="wide-left">
+        <Section title="You">
+          {status === 'loading' || !mine ? (
+            <ListSkeleton rows={3} />
+          ) : mine.items.length === 0 ? (
+            <NothingDueForYou hasAnyHabits={habits.some((h) => h.owner_id === me?.id)} />
+          ) : (
+            <>
+              <Card className="px-4">
+                <ul>
+                  {mine.items.map((item) => (
+                    <OwnHabitRow
+                      key={item.habit.id}
+                      status={item}
+                      onToggle={() => void toggleCheckin(item.habit, today, item.completedToday)}
+                      onOpenActions={() => setActionsFor(item)}
+                    />
+                  ))}
+                </ul>
+              </Card>
+              <p className="mt-3 px-1 text-[0.85rem] text-ink-faint">
+                {describeDailyProgress(mine.completedCount, mine.totalCount)}
+              </p>
+            </>
+          )}
         </Section>
-      )}
+
+        {status === 'ready' && theirs.length > 0 && (
+          // `lg:mt-0` cancels Section's stacking rhythm once these sit side by side,
+          // so both column headings line up.
+          <Section title="Your people" className="lg:mt-0">
+            <div className="space-y-3">
+              {theirs.map((person) => (
+                <FriendCard
+                  key={person.profile.id}
+                  person={person}
+                  viewerId={me?.id ?? ''}
+                  sentNudges={sentNudges}
+                  onNudge={(habit) => setNudgeTarget({ habit, person: person.profile })}
+                />
+              ))}
+            </div>
+          </Section>
+        )}
+      </Columns>
 
       {actionsFor && (
         <HabitActionSheet

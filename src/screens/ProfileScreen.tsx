@@ -58,7 +58,7 @@ export function ProfileScreen() {
   }
 
   return (
-    <Screen>
+    <Screen width="form">
       <PageHeader title="Your profile" backTo="/me" backLabel="Me" />
 
       <form onSubmit={handleSubmit} noValidate className="space-y-7">

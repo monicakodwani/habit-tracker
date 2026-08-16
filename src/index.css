@@ -150,6 +150,18 @@
   }
 }
 
+/* The desktop form of a sheet: a centred dialog, so it settles rather than slides. */
+@keyframes dialog-in {
+  from {
+    transform: scale(0.97);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 /* A single quiet pulse when a habit starts asking for help. */
 @keyframes at-risk-in {
   from {

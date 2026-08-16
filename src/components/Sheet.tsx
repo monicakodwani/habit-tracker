@@ -1,9 +1,15 @@
 /**
- * A bottom sheet.
+ * A bottom sheet on phones, a centred dialog on desktop.
  *
- * Chosen over a centred modal because every use of it is a thumb-reach action on a
- * phone: choosing a nudge, or picking what to do about a habit. It slides up from
- * where the thumb already is.
+ * One component, one set of behaviour, two presentations. On a phone every use of
+ * this is a thumb-reach action — choosing a nudge, deciding what to do about a habit
+ * — so it slides up from where the thumb already is. With a pointer and a large
+ * screen, a sheet pinned to the bottom edge is just a long way from where you are
+ * looking, so from `sm` up it becomes a centred dialog.
+ *
+ * Nothing conditional happens in JavaScript: the difference is entirely CSS, so
+ * there is no breakpoint state to get out of sync and no second component to keep
+ * in step.
  *
  * Handles the things that are easy to forget and obvious when missing: Escape closes
  * it, a click on the backdrop closes it, focus moves inside on open and returns to
@@ -82,7 +88,7 @@ export function Sheet({ open, onClose, title, subtitle, children }: SheetProps) 
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
       <button
         type="button"
         aria-label="Close"
@@ -95,15 +101,18 @@ export function Sheet({ open, onClose, title, subtitle, children }: SheetProps) 
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="relative w-full max-w-[28rem] animate-[sheet-in_200ms_ease-out] rounded-t-3xl border border-line bg-surface px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-3 shadow-2xl focus:outline-none"
+        className="relative w-full max-w-[28rem] animate-[sheet-in_200ms_ease-out] rounded-t-3xl border border-line bg-surface px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-3 shadow-2xl focus:outline-none sm:animate-[dialog-in_160ms_ease-out] sm:rounded-2xl sm:px-6 sm:pb-6 sm:pt-5"
       >
-        {/* Grab handle: purely a visual affordance, hidden from assistive tech. */}
-        <div aria-hidden="true" className="mx-auto mb-3 h-1 w-9 rounded-full bg-line" />
+        {/*
+          Grab handle: a phone affordance for a sheet you can flick away. Meaningless
+          next to a pointer, so it goes at `sm`. Hidden from assistive tech either way.
+        */}
+        <div aria-hidden="true" className="mx-auto mb-3 h-1 w-9 rounded-full bg-line sm:hidden" />
 
         <h2 className="text-[1.05rem] font-semibold">{title}</h2>
         {subtitle && <p className="mt-0.5 text-[0.85rem] text-ink-soft">{subtitle}</p>}
 
-        <div className="mt-4 max-h-[65dvh] overflow-y-auto">{children}</div>
+        <div className="mt-4 max-h-[65dvh] overflow-y-auto sm:max-h-[70dvh]">{children}</div>
       </div>
     </div>
   )

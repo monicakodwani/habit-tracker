@@ -12,7 +12,7 @@ import { useToast } from '../components/Toast'
 import { describeRecurrence } from '../domain/recurrence'
 import { describeError } from '../lib/supabase'
 import type { Habit } from '../types/models'
-import { Card, Screen, Section } from '../components/Layout'
+import { Card, Columns, PageTitle, Screen, Section } from '../components/Layout'
 import { Button, ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 import { NotificationSettings } from '../components/NotificationSettings'
 
@@ -45,35 +45,52 @@ export function MeScreen() {
   }
 
   return (
-    <Screen>
-      <header className="mb-7">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">Me</h1>
-      </header>
+    /*
+     * Settings read better in a column than spread across the whole shell — a habit
+     * row with its name at one edge and "Archive" a thousand pixels away at the
+     * other is harder to use, not easier.
+     */
+    <Screen width="settings">
+      <PageTitle>Me</PageTitle>
 
-      <Section>
-        {me ? (
-          <Link
-            to="/me/profile"
-            className="flex min-h-16 items-center gap-3.5 rounded-2xl border border-line bg-surface px-4 py-3.5"
-          >
-            <span aria-hidden="true" className="text-3xl leading-none">
-              {me.avatar_emoji}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[1.05rem] font-semibold">
-                {me.display_name}
+      {/*
+        Profile and notifications are both short, self-contained settings groups, so
+        on desktop they sit side by side rather than running down the page as a long
+        thin ribbon of controls. The habit list stays full width below — that is the
+        part that actually benefits from the room.
+      */}
+      <Columns>
+        <Section>
+          {me ? (
+            <Link
+              to="/me/profile"
+              className="flex min-h-16 items-center gap-3.5 rounded-2xl border border-line bg-surface px-4 py-3.5 transition-colors hover:bg-sunken/50"
+            >
+              <span aria-hidden="true" className="text-3xl leading-none">
+                {me.avatar_emoji}
               </span>
-              <span className="mt-0.5 block truncate text-[0.82rem] text-ink-faint">
-                {me.timezone.replace(/_/g, ' ')}
-                {group && ` · ${group.name}`}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[1.05rem] font-semibold">
+                  {me.display_name}
+                </span>
+                <span className="mt-0.5 block truncate text-[0.82rem] text-ink-faint">
+                  {me.timezone.replace(/_/g, ' ')}
+                  {group && ` · ${group.name}`}
+                </span>
               </span>
-            </span>
-            <Chevron />
-          </Link>
-        ) : (
-          <ListSkeleton rows={1} />
+              <Chevron />
+            </Link>
+          ) : (
+            <ListSkeleton rows={1} />
+          )}
+        </Section>
+
+        {me && (
+          <Section title="Notifications" className="lg:mt-0">
+            <NotificationSettings userId={me.id} />
+          </Section>
         )}
-      </Section>
+      </Columns>
 
       <Section
         title="Your habits"
@@ -143,14 +160,9 @@ export function MeScreen() {
         </Section>
       )}
 
-      {me && (
-        <Section title="Notifications">
-          <NotificationSettings userId={me.id} />
-        </Section>
-      )}
-
       <Section title="Settings">
-        <Card className="px-4 py-2">
+        {/* A sign-out button has no business being 1000px wide. */}
+        <Card className="px-4 py-2 lg:max-w-sm">
           <Button variant="quiet" full className="justify-start px-0" onClick={() => void signOut()}>
             Sign out
           </Button>
@@ -175,7 +187,15 @@ function HabitManageRow({
 }) {
   return (
     <li className="flex items-center gap-2 border-b border-line/70 last:border-b-0">
-      <Link to={`/habits/${habit.id}`} className="flex min-h-16 flex-1 items-center gap-3 py-3">
+      {/*
+        `min-w-0` is load-bearing: without it this flex child refuses to shrink below
+        its content, so a 60-character habit name pushes the row past the viewport
+        instead of letting the name truncate.
+      */}
+      <Link
+        to={`/habits/${habit.id}`}
+        className="flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3"
+      >
         <span aria-hidden="true" className="text-xl leading-none">
           {habit.emoji}
         </span>

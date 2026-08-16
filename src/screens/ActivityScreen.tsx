@@ -14,7 +14,7 @@ import type { ActivityEvent, Profile, ReactionEmoji } from '../types/models'
 import { REACTION_EMOJI } from '../types/models'
 import { formatRelativeDay } from '../domain/dates'
 import type { LocalDate } from '../types/models'
-import { Card, Screen, Section } from '../components/Layout'
+import { Card, PageTitle, Screen, Section } from '../components/Layout'
 import { Button, EmptyState, ListSkeleton } from '../components/ui'
 
 export function ActivityScreen() {
@@ -32,10 +32,14 @@ export function ActivityScreen() {
   const grouped = useMemo(() => groupByDay(events), [events])
 
   return (
-    <Screen>
-      <header className="mb-7">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">Activity</h1>
-      </header>
+    /*
+     * A feed is prose-shaped, so it keeps a comfortable measure rather than
+     * stretching across the shell. The remaining desktop space is deliberately left
+     * empty — there is nothing already in the product worth putting there, and
+     * inventing a widget to fill it would make this look like a dashboard.
+     */
+    <Screen width="reading">
+      <PageTitle>Activity</PageTitle>
 
       {loading ? (
         <ListSkeleton rows={4} />
@@ -230,7 +234,9 @@ function ReactionBar({
               onClick={() => onReact(emoji)}
               aria-pressed={active}
               aria-label={active ? `Remove ${emoji} reaction` : `React with ${emoji}`}
-              className={`flex size-9 items-center justify-center rounded-full text-[0.95rem] transition-colors ${
+              // 44px so it is a comfortable thumb target; the emoji inside stays
+              // small, so the row still reads as a quiet strip rather than buttons.
+              className={`flex size-11 items-center justify-center rounded-full text-[0.95rem] transition-colors ${
                 active ? 'bg-accent-soft' : 'hover:bg-sunken'
               }`}
             >

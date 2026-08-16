@@ -25,11 +25,12 @@ custom server.
 - [Deploying to GitHub Pages](#deploying-to-github-pages)
 - [Environment variables and what is safe to expose](#environment-variables-and-what-is-safe-to-expose)
 - [Tests](#tests)
+- [Responsive layout](#responsive-layout)
 - [Architecture](#architecture)
 - [Semantics that are easy to get wrong](#semantics-that-are-easy-to-get-wrong)
 - [Security model](#security-model)
 - [Design decisions](#design-decisions)
-- [Diagnosing push](#diagnosing-push)
+- [If push stops arriving](#if-push-stops-arriving)
 - [Installing on an iPhone](#installing-on-an-iphone)
 - [Known limitations](#known-limitations)
 - [Not built](#not-built)
@@ -47,6 +48,9 @@ shared habits underneath. Anyone asking for a push floats to the top of their ca
 reactions.
 
 **Me** — your profile, your habits, notification settings, sign out.
+
+The four destinations are a bottom tab bar on phones and tablets, and a left sidebar
+from 1024px up — never both.
 
 **Habit detail** — streaks, a month calendar with five states, recent history.
 
@@ -360,6 +364,31 @@ friend being unable to read anyone's push subscription.
 
 ---
 
+## Responsive layout
+
+One React application, one set of screens, no duplicated mobile/desktop trees. The
+difference is entirely CSS breakpoints; nothing measures `window.innerWidth`.
+
+| | phone (<768px) | tablet (768px+) | desktop (1024px+) |
+| --- | --- | --- | --- |
+| Navigation | bottom tab bar | bottom tab bar | left sidebar |
+| Shell | single column | wider single column | sidebar + content, capped at 80rem |
+| Today | You, then Your people | same, wider | two columns, 55/45 |
+| Week | days beneath each habit | same | habit and its week on one row |
+| Activity | single column | single column | centred reading column |
+| Me | stacked | stacked | profile and notifications side by side |
+| Habit detail | stacked | stacked | stats left, calendar right |
+| Sheets | bottom sheet | bottom sheet | centred dialog (from 640px) |
+
+Screens never set their own widths. They declare an intent — `default`, `settings`,
+`reading` or `form` — and `src/components/Layout.tsx` decides what that means at each
+size. That is what stops the app drifting into a pile of one-off `max-w-` overrides.
+
+`AppShell` composes the sidebar and content region; `Columns` is the shared two-column
+primitive; `Screen` handles gutters, safe areas and the width intent. `BottomNav` and
+`Sidebar` both render from `NAV_ITEMS`, so a destination cannot exist in one and not
+the other.
+
 ## Architecture
 
 ```
@@ -538,23 +567,27 @@ which on iOS is a real source of friction.
 
 ---
 
-## Diagnosing push
+## If push stops arriving
 
-**Me → Notifications → Send a test** pushes a notification to your own devices and
-reports what actually happened. It is the fastest way to tell apart the causes that
-all look identical from the outside:
+Push failure never affects anything else — a nudge is committed to the database before
+delivery is attempted, so nudges, at-risk, the feed and reactions all keep working.
 
-| It says | What it means |
+Function logs are in the dashboard under **Edge Functions → send-push → Logs** (there is
+no `supabase functions logs` subcommand). Lines read `[send-push] <stage> <message>`, and
+the stage names the layer that failed: `env`, `auth`, `parse`, `vapid`, `resolve`, `deliver`.
+
+The usual causes, in order of likelihood:
+
+| Symptom | Cause |
 | --- | --- |
-| Sent to N devices | Working. If nothing appears, the OS is suppressing it — check Focus/Do Not Disturb. |
-| No devices are registered | The subscription was never stored. Turn notifications off and on again. |
-| The push service rejected it | Almost always a VAPID mismatch: the key the server signs with is not the one the app was built with. |
-| Subscription had expired | The browser rotated it. Turn notifications off and on again. |
-| The server has no VAPID keys | `supabase secrets set` was not run, or the function was not redeployed after. |
+| Nothing arrives, no errors | The recipient never enabled notifications on that device, or has the relevant preference off. |
+| `deliver` logs a 401/403 | VAPID mismatch — the key the server signs with is not the one the app was built with. |
+| `vapid` stage errors | `supabase secrets set` was not run, or the function was not redeployed after it. |
+| Worked, then stopped | The browser rotated its subscription. Turn notifications off and on again in Me. |
 
-Because `supabase secrets list` only shows digests, a VAPID mismatch cannot be checked
-by eye. The reliable fix is to set both halves from the *same* `npm run vapid` output,
-redeploy the function, and confirm the public half matches the one in the built bundle.
+Because `supabase secrets list` shows only digests, a VAPID mismatch cannot be checked by
+eye. The fix is to set both halves from the *same* `npm run vapid` output, redeploy the
+function, and re-run the Pages workflow so the bundle carries the matching public key.
 
 ## Installing on an iPhone
 

@@ -93,7 +93,9 @@ export function OwnHabitRow({
         */}
         <Link
           to={`/habits/${habit.id}`}
-          className="flex min-h-16 flex-1 items-center gap-3 py-3 pr-2 text-left"
+          // `min-w-0` lets this shrink so a long habit name truncates instead of
+          // pushing the row past the viewport.
+          className="flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-xl py-3 pr-2 text-left transition-colors hover:bg-sunken/50"
         >
           <span aria-hidden="true" className="text-2xl leading-none">
             {habit.emoji}
@@ -214,10 +216,12 @@ export function FriendHabitRow({
           <button
             type="button"
             onClick={onNudge}
-            className={`min-h-9 shrink-0 rounded-full px-3 text-[0.78rem] font-semibold transition-colors ${
+            // 44px tall so it is comfortable to hit with a thumb; the pill still
+            // reads as small because it stays narrow.
+            className={`min-h-11 shrink-0 rounded-full px-3.5 text-[0.78rem] font-semibold transition-colors ${
               atRisk
                 ? 'bg-flame text-bg hover:opacity-90'
-                : 'border border-line text-ink-soft hover:bg-sunken'
+                : 'border border-line text-ink-soft hover:bg-sunken hover:text-ink'
             }`}
           >
             Nudge

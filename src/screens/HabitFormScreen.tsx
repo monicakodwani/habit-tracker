@@ -19,7 +19,7 @@ export function HabitFormScreen({ mode }: { mode: 'create' | 'edit' }) {
   if (mode === 'edit') {
     if (status === 'loading') {
       return (
-        <Screen>
+        <Screen width="form">
           <PageHeader title="Edit habit" backTo="/me" />
           <ListSkeleton rows={4} />
         </Screen>

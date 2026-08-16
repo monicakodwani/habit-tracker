@@ -13,7 +13,7 @@ import type { DayOutcome } from '../domain/dayState'
 import { formatWeekRange, weekDates } from '../domain/dates'
 import { WEEKDAY_INITIALS, WEEKDAYS } from '../types/models'
 import { describeRecurrence } from '../domain/recurrence'
-import { Card, Screen, Section } from '../components/Layout'
+import { Card, PageTitle, Screen, Section } from '../components/Layout'
 import { ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 
 export function WeekScreen() {
@@ -27,10 +27,7 @@ export function WeekScreen() {
 
   return (
     <Screen>
-      <header className="mb-7">
-        <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight">This week</h1>
-        <p className="mt-1 text-[0.95rem] text-ink-soft">{formatWeekRange(today, zone)}</p>
-      </header>
+      <PageTitle subtitle={formatWeekRange(today, zone)}>This week</PageTitle>
 
       <Section>
         {status === 'loading' ? (
@@ -56,8 +53,17 @@ function HabitWeekRow({ row }: { row: WeekRow }) {
   const { habit, days, weekly } = row
 
   return (
-    <Card className="px-4 py-3.5">
-      <Link to={`/habits/${habit.id}`} className="flex min-h-11 items-center gap-2.5">
+    /*
+     * Phone: the habit's name on one line, its seven days beneath.
+     * Desktop: both on a single line, name left and days right, which is far easier
+     * to scan down a column of habits — and the extra width lets the day cells and
+     * their labels grow instead of staying phone-sized in a big empty row.
+     */
+    <Card className="px-4 py-3.5 lg:flex lg:items-center lg:gap-8 lg:py-4 lg:pl-5">
+      <Link
+        to={`/habits/${habit.id}`}
+        className="flex min-h-11 items-center gap-2.5 rounded-xl transition-colors lg:min-w-0 lg:flex-1 lg:hover:bg-sunken/60"
+      >
         <span aria-hidden="true" className="text-lg leading-none">
           {habit.emoji}
         </span>
@@ -76,14 +82,14 @@ function HabitWeekRow({ row }: { row: WeekRow }) {
         tiny text or horizontal scrolling on a 375px screen. A labelled list of days
         reads correctly to a screen reader and fits comfortably.
       */}
-      <ul className="mt-2.5 flex justify-between">
+      <ul className="mt-2.5 flex justify-between lg:mt-0 lg:w-[22rem] lg:shrink-0 lg:justify-between">
         {days.map((cell, i) => {
           const weekday = WEEKDAYS[i]!
           return (
             <li key={cell.date} className="flex flex-col items-center gap-1.5">
               <span
                 aria-hidden="true"
-                className={`text-[0.68rem] font-semibold ${
+                className={`text-[0.68rem] font-semibold lg:text-[0.72rem] ${
                   cell.isToday ? 'text-accent-ink' : 'text-ink-faint'
                 }`}
               >
@@ -137,7 +143,7 @@ function DayCell({
                   ? 'still to come'
                   : 'not scheduled'
 
-  const base = 'flex size-7 items-center justify-center rounded-full text-[0.7rem]'
+  const base = 'flex size-7 lg:size-9 items-center justify-center rounded-full text-[0.7rem]'
   const style =
     outcome === 'done' || outcome === 'clean'
       ? 'bg-accent text-bg'
@@ -159,7 +165,7 @@ function DayCell({
     >
       <span className="sr-only">{`${habitName}, ${cell.date}: ${label}`}</span>
       {outcome === 'done' || outcome === 'clean' ? (
-        <svg viewBox="0 0 20 20" aria-hidden="true" className="size-3.5">
+        <svg viewBox="0 0 20 20" aria-hidden="true" className="size-3.5 lg:size-4">
           <path
             d="m4.5 10.5 3.5 3.5 7.5-8"
             fill="none"

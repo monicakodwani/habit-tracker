@@ -9,8 +9,9 @@ import { AuthProvider, useAuth } from './hooks/useAuth'
 import { AppDataProvider, useAppData } from './hooks/useAppData'
 import { ToastProvider } from './components/Toast'
 import { BottomNav } from './components/BottomNav'
+import { Sidebar } from './components/Sidebar'
 import { Button, FullScreenLoader } from './components/ui'
-import { Screen } from './components/Layout'
+import { AppShell, Screen } from './components/Layout'
 import { AuthScreen } from './screens/AuthScreen'
 import { TodayScreen } from './screens/TodayScreen'
 import { WeekScreen } from './screens/WeekScreen'
@@ -51,8 +52,13 @@ function SignedInApp() {
   if (status === 'error') return <LoadFailed />
   if (status === 'no-group') return <NotInAGroup />
 
+  /*
+   * One shell for both sizes. The sidebar hides itself below `lg` and the tab bar
+   * hides itself from `lg` up, so exactly one is ever visible — and the routes,
+   * screens and data flow are identical either way.
+   */
   return (
-    <>
+    <AppShell sidebar={<Sidebar />}>
       <Routes>
         <Route path="/" element={<TodayScreen />} />
         <Route path="/week" element={<WeekScreen />} />
@@ -66,7 +72,7 @@ function SignedInApp() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <BottomNav />
-    </>
+    </AppShell>
   )
 }
 

@@ -70,8 +70,15 @@ export function AuthScreen() {
   }
 
   return (
+    /*
+     * One centred card at every size — deliberately not a split-screen marketing
+     * page. On a phone it stays the plain full-bleed page it has always been; from
+     * `sm` up it gains a surface so it reads as an object rather than text adrift in
+     * a large window.
+     */
     <main className="mx-auto flex min-h-dvh w-full max-w-[26rem] flex-col justify-center px-6 py-12">
-      <div className="mb-9 text-center">
+      <div className="sm:rounded-3xl sm:border sm:border-line sm:bg-surface sm:px-8 sm:py-10 sm:shadow-sm">
+        <div className="mb-9 text-center">
         <p aria-hidden="true" className="text-4xl">
           🌱
         </p>
@@ -152,6 +159,7 @@ export function AuthScreen() {
           {isSignUp ? 'Sign in' : 'Create one'}
         </button>
       </p>
+      </div>
     </main>
   )
 }

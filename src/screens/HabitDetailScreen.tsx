@@ -35,7 +35,7 @@ import { avoidStreak } from '../domain/streaks'
 import { buildDayLookup, resolveDay } from '../domain/dayState'
 import type { DayOutcome } from '../domain/dayState'
 import type { HabitDay } from '../types/models'
-import { Card, PageHeader, Screen, Section } from '../components/Layout'
+import { Card, Columns, PageHeader, Screen, Section } from '../components/Layout'
 import { Button, EmptyState, ListSkeleton } from '../components/ui'
 
 export function HabitDetailScreen() {
@@ -127,15 +127,36 @@ export function HabitDetailScreen() {
           <ListSkeleton rows={3} />
         </div>
       ) : (
-        <>
-          <Consistency habit={habit} history={history} dayRows={dayRows} today={today} zone={zone} />
-          <MonthCalendar habit={habit} history={history} dayRows={dayRows} today={today} zone={zone} />
-          <History history={history} today={today} zone={zone} />
-        </>
+        /*
+         * Stacked on a phone. On desktop the numbers sit beside the calendar rather
+         * than above it, which keeps the whole habit visible at once instead of
+         * requiring a scroll between "how am I doing" and "when did I do it".
+         */
+        <Columns>
+          <div>
+            <Consistency
+              habit={habit}
+              history={history}
+              dayRows={dayRows}
+              today={today}
+              zone={zone}
+            />
+            <History history={history} today={today} zone={zone} />
+          </div>
+          <div className="lg:mt-0">
+            <MonthCalendar
+              habit={habit}
+              history={history}
+              dayRows={dayRows}
+              today={today}
+              zone={zone}
+            />
+          </div>
+        </Columns>
       )}
 
       <Section title="Manage">
-        <div className="space-y-2.5">
+        <div className="space-y-2.5 lg:max-w-sm">
           <Link
             to={`/habits/${habit.id}/edit`}
             className="flex min-h-12 w-full items-center justify-center rounded-full border border-line bg-surface px-5 text-[0.95rem] font-semibold hover:bg-sunken"
@@ -321,7 +342,7 @@ function MonthCalendar({
   const isWeekly = habit.recurrence_type === 'weekly_target'
 
   return (
-    <Section title={formatMonthYear(today, zone)}>
+    <Section title={formatMonthYear(today, zone)} className="lg:mt-0">
       <Card className="px-3 py-4">
         <div aria-hidden="true" className="mb-2 grid grid-cols-7 gap-1">
           {WEEKDAYS.map((day) => (
