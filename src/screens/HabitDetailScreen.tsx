@@ -19,7 +19,7 @@ import {
   formatMonthYear,
   formatRelativeDay,
   monthGrid,
-  weekdayOf,
+
 } from '../domain/dates'
 import {
   recentCheckins,
@@ -30,6 +30,11 @@ import {
 } from '../domain/streaks'
 import { describeError } from '../lib/supabase'
 import { fetchHabitCheckins } from '../services/checkins'
+import { fetchHabitDayHistory } from '../services/social'
+import { avoidStreak } from '../domain/streaks'
+import { buildDayLookup, resolveDay } from '../domain/dayState'
+import type { DayOutcome } from '../domain/dayState'
+import type { HabitDay } from '../types/models'
 import { Card, PageHeader, Screen, Section } from '../components/Layout'
 import { Button, EmptyState, ListSkeleton } from '../components/ui'
 
@@ -41,6 +46,7 @@ export function HabitDetailScreen() {
 
   const habit = habits.find((h) => h.id === habitId)
   const [history, setHistory] = useState<Checkin[] | null>(null)
+  const [dayRows, setDayRows] = useState<HabitDay[]>([])
   const [busy, setBusy] = useState(false)
 
   // The habit's own history, independent of the app-wide check-in window.
@@ -49,9 +55,11 @@ export function HabitDetailScreen() {
     let active = true
 
     setHistory(null)
-    fetchHabitCheckins(habitId)
-      .then((rows) => {
-        if (active) setHistory(rows)
+    Promise.all([fetchHabitCheckins(habitId), fetchHabitDayHistory(habitId)])
+      .then(([checkins, days]) => {
+        if (!active) return
+        setHistory(checkins)
+        setDayRows(days)
       })
       .catch((cause) => {
         if (!active) return
@@ -120,8 +128,8 @@ export function HabitDetailScreen() {
         </div>
       ) : (
         <>
-          <Consistency habit={habit} history={history} today={today} zone={zone} />
-          <MonthCalendar habit={habit} history={history} today={today} zone={zone} />
+          <Consistency habit={habit} history={history} dayRows={dayRows} today={today} zone={zone} />
+          <MonthCalendar habit={habit} history={history} dayRows={dayRows} today={today} zone={zone} />
           <History history={history} today={today} zone={zone} />
         </>
       )}
@@ -152,22 +160,33 @@ function Tag({ children }: { children: string }) {
   )
 }
 
-/** Streaks for scheduled habits; per-week counts for weekly-target ones. */
+/**
+ * Streaks for scheduled habits, per-week counts for weekly-target ones, and the
+ * "still going" form for avoidance habits.
+ */
 function Consistency({
   habit,
   history,
+  dayRows,
   today,
   zone,
 }: {
   habit: Habit
   history: Checkin[]
+  dayRows: HabitDay[]
   today: LocalDate
   zone: string
 }) {
   const isWeekly = habit.recurrence_type === 'weekly_target'
+  const isAvoid = habit.kind === 'avoid'
+
   const streak = useMemo(
-    () => scheduledStreak(habit, history, today, zone),
-    [habit, history, today, zone],
+    () => scheduledStreak(habit, history, today, zone, dayRows),
+    [habit, history, today, zone, dayRows],
+  )
+  const avoid = useMemo(
+    () => (isAvoid ? avoidStreak(habit, dayRows, today, zone) : null),
+    [isAvoid, habit, dayRows, today, zone],
   )
   const weeks = useMemo(
     () => (isWeekly ? recentWeeks(habit, history, today, zone, 6) : []),
@@ -178,11 +197,13 @@ function Consistency({
     [isWeekly, habit, history, today, zone],
   )
   const range = useMemo(
-    () => summarizeRange(habit, history, today, zone, 30),
-    [habit, history, today, zone],
+    () => summarizeRange(habit, history, today, zone, 30, dayRows),
+    [habit, history, today, zone, dayRows],
   )
 
-  if (history.length === 0) {
+  // An avoidance habit has meaningful history from the day it was created, even with
+  // no records at all — silence *is* the success. Only 'do' habits need check-ins.
+  if (history.length === 0 && !isAvoid) {
     return (
       <Section title="Consistency">
         <EmptyState title="No check-ins yet." compact />
@@ -198,6 +219,15 @@ function Consistency({
             <Stat label="Weeks in a row" value={String(weekStreak)} accent={weekStreak > 0} />
             <Stat label="This week" value={`${weeks[weeks.length - 1]?.completed ?? 0} / ${habit.weekly_target ?? 0}`} />
           </>
+        ) : avoid ? (
+          <>
+            <Stat
+              label="Clean streak"
+              value={avoid.current > 0 ? `🔥 ${avoid.current}` : '—'}
+              accent={avoid.current > 0}
+            />
+            <Stat label="Longest" value={avoid.longest > 0 ? String(avoid.longest) : '—'} />
+          </>
         ) : (
           <>
             <Stat
@@ -209,6 +239,13 @@ function Consistency({
           </>
         )}
       </div>
+
+      {/* Today is never folded into the number — it has not been won yet. */}
+      {avoid?.stillGoingToday && (
+        <p className="mt-2.5 px-1 text-[0.85rem] font-medium text-accent-ink">
+          Still going today
+        </p>
+      )}
 
       {isWeekly && (
         <Card className="mt-2.5 px-4 py-3.5">
@@ -233,8 +270,9 @@ function Consistency({
       )}
 
       <p className="mt-3 px-1 text-[0.82rem] text-ink-faint">
-        Last 30 days · {range.completed} completed
+        Last 30 days · {range.completed} {isAvoid ? 'clean' : 'completed'}
         {range.scheduled > 0 && ` of ${range.scheduled} due`}
+        {range.excused > 0 && ` · ${range.excused} excused`}
       </p>
     </Section>
   )
@@ -256,24 +294,30 @@ function Stat({ label, value, accent = false }: { label: string; value: string; 
 /**
  * A month grid — deliberately a simple calendar rather than a chart.
  *
- * Three states per cell: completed, due-but-not, and not-due. Keeping "not due"
- * visually distinct is what stops a Mon–Fri habit from looking like it fails every
- * weekend.
+ * Five states, which is the most a calendar can carry before it stops being readable:
+ * success, missed, excused, a lapse, and not-due. Keeping "not due" visually distinct
+ * is what stops a Mon–Fri habit from looking like it fails every weekend, and keeping
+ * "excused" distinct from "missed" is the whole point of grace.
+ *
+ * Colour is never the only signal — every cell carries a screen-reader label, and the
+ * legend below names each state in words.
  */
 function MonthCalendar({
   habit,
   history,
+  dayRows,
   today,
   zone,
 }: {
   habit: Habit
   history: Checkin[]
+  dayRows: HabitDay[]
   today: LocalDate
   zone: string
 }) {
   const grid = useMemo(() => monthGrid(today, zone), [today, zone])
-  const done = useMemo(() => new Set(history.map((c) => c.completion_date)), [history])
-  const scheduledDays = new Set(habit.scheduled_days ?? [])
+  const lookup = useMemo(() => buildDayLookup(history, dayRows), [history, dayRows])
+  const isAvoid = habit.kind === 'avoid'
   const isWeekly = habit.recurrence_type === 'weekly_target'
 
   return (
@@ -289,32 +333,96 @@ function MonthCalendar({
         <div className="grid grid-cols-7 gap-1">
           {grid.flat().map((date, i) => {
             if (!date) return <span key={`pad-${i}`} />
-
-            const completed = done.has(date)
-            const due = isWeekly || scheduledDays.has(weekdayOf(date, zone))
-            const future = date > today
-
+            const outcome = resolveDay(habit, date, today, zone, lookup)
             return (
-              <span
+              <DayCell
                 key={date}
-                title={date}
-                className={`flex aspect-square items-center justify-center rounded-lg text-[0.72rem] tabular-nums ${
-                  completed
-                    ? 'bg-accent font-semibold text-bg'
-                    : !due
-                      ? 'text-ink-faint/45'
-                      : future
-                        ? 'text-ink-faint'
-                        : 'bg-sunken text-ink-soft'
-                } ${date === today ? 'ring-2 ring-accent/40' : ''}`}
-              >
-                {Number(date.slice(8, 10))}
-              </span>
+                date={date}
+                outcome={outcome}
+                isToday={date === today}
+                isWeekly={isWeekly}
+                completed={lookup.completed.has(date)}
+              />
             )
           })}
         </div>
       </Card>
+
+      <Legend isAvoid={isAvoid} />
     </Section>
+  )
+}
+
+const CELL_STYLES: Record<DayOutcome, string> = {
+  done: 'bg-accent font-semibold text-bg',
+  clean: 'bg-accent font-semibold text-bg',
+  missed: 'bg-sunken text-ink-soft',
+  lapsed: 'bg-danger-soft font-semibold text-danger',
+  excused: 'border border-dashed border-accent/50 text-accent-ink',
+  pending: 'border border-line text-ink-soft',
+  'still-going': 'border border-accent text-accent-ink',
+  off: 'text-ink-faint/45',
+}
+
+const CELL_LABELS: Record<DayOutcome, string> = {
+  done: 'done',
+  clean: 'clean',
+  missed: 'missed',
+  lapsed: 'slip',
+  excused: 'excused',
+  pending: 'still to do',
+  'still-going': 'still going',
+  off: 'not scheduled',
+}
+
+function DayCell({
+  date,
+  outcome,
+  isToday,
+  isWeekly,
+  completed,
+}: {
+  date: LocalDate
+  outcome: DayOutcome
+  isToday: boolean
+  isWeekly: boolean
+  completed: boolean
+}) {
+  // A weekly-target habit has no schedule, so an un-completed day is simply blank
+  // rather than a judgement.
+  const effective: DayOutcome = isWeekly ? (completed ? 'done' : 'off') : outcome
+
+  return (
+    <span
+      className={`flex aspect-square items-center justify-center rounded-lg text-[0.72rem] tabular-nums ${
+        CELL_STYLES[effective]
+      } ${isToday ? 'ring-2 ring-accent/40' : ''}`}
+    >
+      <span className="sr-only">{`${date}: ${CELL_LABELS[effective]}`}</span>
+      <span aria-hidden="true">{Number(date.slice(8, 10))}</span>
+    </span>
+  )
+}
+
+/** Names each calendar state in words, so colour is never the only cue. */
+function Legend({ isAvoid }: { isAvoid: boolean }) {
+  const items = [
+    { className: 'bg-accent', label: isAvoid ? 'Clean day' : 'Done' },
+    isAvoid
+      ? { className: 'bg-danger-soft border border-danger/40', label: 'Slip' }
+      : { className: 'bg-sunken', label: 'Missed' },
+    { className: 'border border-dashed border-accent/50', label: 'Excused' },
+  ]
+
+  return (
+    <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 px-1">
+      {items.map((item) => (
+        <li key={item.label} className="flex items-center gap-1.5 text-[0.72rem] text-ink-faint">
+          <span aria-hidden="true" className={`size-3 rounded ${item.className}`} />
+          {item.label}
+        </li>
+      ))}
+    </ul>
   )
 }
 

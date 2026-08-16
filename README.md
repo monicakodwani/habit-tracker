@@ -3,11 +3,14 @@
 **Live:** <https://monicakodwani.github.io/habit-tracker/>
 
 A small, private habit-accountability app for three friends. Everyone keeps their own
-habits, and everyone can see how the others are doing on the ones they choose to share.
+habits, everyone can see how the others are doing on the ones they choose to share, and
+everyone can bother each other about it.
 
-React + TypeScript + Vite on the front, Supabase (Postgres + Auth + Row Level
-Security) on the back, deployed as static files to GitHub Pages. There is no custom
-server.
+The app records consistency. The friends provide accountability.
+
+React + TypeScript + Vite on the front, Supabase (Postgres + Auth + Row Level Security
++ Edge Functions) on the back, deployed as static files to GitHub Pages. There is no
+custom server.
 
 ---
 
@@ -16,41 +19,60 @@ server.
 - [What it does](#what-it-does)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
-  - [1. Create the Supabase project](#1-create-the-supabase-project)
-  - [2. Run the migration](#2-run-the-migration)
-  - [3. Configure the app](#3-configure-the-app)
-  - [4. Run it locally](#4-run-it-locally)
-  - [5. Add the three accounts and create the group](#5-add-the-three-accounts-and-create-the-group)
-  - [6. Optional: seed some history](#6-optional-seed-some-history)
+- [Upgrading an existing deployment](#upgrading-an-existing-deployment)
+- [Web Push](#web-push)
+- [Try it locally without a Supabase account](#try-it-locally-without-a-supabase-account)
 - [Deploying to GitHub Pages](#deploying-to-github-pages)
 - [Environment variables and what is safe to expose](#environment-variables-and-what-is-safe-to-expose)
 - [Tests](#tests)
 - [Architecture](#architecture)
+- [Semantics that are easy to get wrong](#semantics-that-are-easy-to-get-wrong)
 - [Security model](#security-model)
 - [Design decisions](#design-decisions)
-- [Local Supabase (optional)](#local-supabase-optional)
-- [Not built yet](#not-built-yet)
+- [Installing on an iPhone](#installing-on-an-iphone)
+- [Known limitations](#known-limitations)
+- [Not built](#not-built)
 
 ---
 
 ## What it does
 
-**Today** — your habits due today, with one tap to complete or undo, your progress
-line, and each friend's shared habits underneath (read-only).
+**Today** — your habits for today, one tap to complete or undo, and each friend's
+shared habits underneath. Anyone asking for a push floats to the top of their card.
 
-**Week** — your own week as a seven-column grid, plus counts for weekly-target habits.
+**Week** — your own week as a seven-column grid.
 
-**Me** — your profile, your habits (edit, archive, restore, delete), and sign out.
+**Activity** — a small group feed: completions, nudges, requests for help, with
+reactions.
 
-**Habit detail** — current and longest streak, a month calendar, and recent check-ins.
+**Me** — your profile, your habits, notification settings, sign out.
 
-Two kinds of habit:
+**Habit detail** — streaks, a month calendar with five states, recent history.
 
-- **Scheduled days** — every day, weekdays, `Tue & Sat`, Sundays… any set of weekdays.
-- **X times per week** — completed on any days; the counter resets each Monday.
+### Kinds of habit
 
-Each habit is **shared** with the group or **private** to you. Private means private:
-its name never leaves the database for anyone but you.
+|  | Success is… | Recurrence |
+| --- | --- | --- |
+| **Do** | completing it | every day, certain days, or X times per week |
+| **Avoid** | a scheduled day *ending* without a lapse | every day or certain days |
+
+Each habit is **shared** with the group or **private** to you. Private means private —
+its name never leaves the database for anyone but you, and it generates no social
+activity of any kind.
+
+### The social bits
+
+- **Nudge** a friend about an unfinished shared habit — five presets or a short custom
+  message. Rules are enforced in SQL, including a two-hour cooldown.
+- **Ask for a push** ("⚠️ I might miss this today") with an optional note. Friends see
+  it prominently and can nudge.
+- **Excuse today** — grace for travel, illness, or a genuinely exceptional day. Doesn't
+  count as done, doesn't break the streak, and drops out of the denominator.
+- **React** to activity with one of ❤️ 🎉 👏 🫡 😂 🔥.
+- **Push notifications** for nudges, requests for help, and (optionally) reactions.
+
+There are no scores, rankings, XP, badges, leaderboards, or percentages comparing
+people. There is no chat and there are no comments.
 
 ---
 
@@ -59,7 +81,8 @@ its name never leaves the database for anyone but you.
 - **Node.js 20+** and npm
 - A **Supabase** account (the free tier is plenty for three people)
 - A **GitHub** repository, for deployment
-- **Docker**, only if you want to run `npm run test:rls` or a local Supabase
+- **Docker**, only if you want `npm run test:rls` or a local Supabase
+- The **Supabase CLI** (`npx supabase`), only for deploying the Edge Function
 
 ---
 
@@ -67,140 +90,214 @@ its name never leaves the database for anyone but you.
 
 ### 1. Create the Supabase project
 
-Create a new project at [supabase.com](https://supabase.com). Pick a region near
-whoever will use it most, and save the database password somewhere safe — you will not
-need it for this app, but you will want it eventually.
+Create a project at [supabase.com](https://supabase.com).
 
-### 2. Run the migration
+### 2. Run the migrations
 
-In the Supabase dashboard, open **SQL Editor → New query** and run the files in
-`supabase/migrations/` **in filename order**, one at a time:
+In the dashboard, open **SQL Editor → New query** and run every file in
+`supabase/migrations/` **in filename order**:
 
-1. [`20260816000000_init.sql`](supabase/migrations/20260816000000_init.sql) — the whole
-   schema: tables, constraints, indexes, triggers, RLS policies, grants, realtime.
-2. [`20260816213000_fix_own_profile_visibility.sql`](supabase/migrations/20260816213000_fix_own_profile_visibility.sql)
-   — lets a user read their own profile before they belong to a group. Without it,
-   every brand new account fails on first sign-in.
+1. `20260816000000_init.sql` — profiles, groups, habits, check-ins, RLS.
+2. `20260816213000_fix_own_profile_visibility.sql` — lets a new user read their own
+   profile before joining a group.
+3. `20260817000000_social.sql` — avoidance habits, day states, nudges, activity feed,
+   reactions, notification preferences, push subscriptions, and the RPCs.
 
-Together these are the complete database, not fragments. Running them on a fresh
-project is all the database setup there is.
+Together these are the complete database. Running them on a fresh project is all the
+setup there is.
 
-> Using the Supabase CLI instead? `supabase db push` picks the migration up
-> automatically.
+> Using the CLI instead? `supabase db push` picks them all up.
 
-### 3. Configure the app
+### 3. Turn off email confirmation
 
-In the dashboard, go to **Project Settings → Data API** and copy the **Project URL**
-and the **anon / public** key.
+**Authentication → Sign In / Providers → Email → Confirm email**. Much simpler for
+three people.
+
+### 4. Configure the app
+
+Copy the **Project URL** and **anon key** from **Project Settings → Data API**:
 
 ```bash
 cp .env.example .env
 ```
-
-Fill in:
 
 ```
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
-Both are safe in the browser — see
-[Environment variables](#environment-variables-and-what-is-safe-to-expose).
+> The URL is the **base** project URL — no `/rest/v1` on the end. That path is the REST
+> endpoint; the client appends it itself.
 
-### 4. Run it locally
+### 5. Run it
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the URL it prints. You should see the sign-in screen.
+### 6. Sign up, then create the group
 
-### 5. Add the three accounts and create the group
+Each person signs up in the app first. They will see *"You're not part of a group
+yet"* — that is correct, because nobody can put themselves in a group.
 
-**First**, each person signs up in the app (**Create one** on the sign-in screen). By
-default Supabase requires email confirmation; for three friends it is simpler to turn
-it off under **Authentication → Sign In / Providers → Email → Confirm email**.
+Then edit the emails at the top of [`supabase/bootstrap.sql`](supabase/bootstrap.sql)
+and run the whole file in the SQL editor. It is safe to re-run.
 
-Signing up creates the account and, via a database trigger, the matching profile row.
-At this point everyone is signed in but sees *"You're not part of a group yet"* — which
-is correct, because nobody can put themselves in a group.
+> **Why manual?** The client has no `INSERT` policy on `groups` or `group_members` at
+> all. There is deliberately no way to create or join a group from a browser, so a
+> stranger who signs up cannot reach your data no matter what they try.
 
-**Then**, open [`supabase/bootstrap.sql`](supabase/bootstrap.sql), edit the two values
-at the top:
+### 7. Optional: seed some history
 
-```sql
-group_name  constant text   := 'Us';
-emails      constant text[] := array[
-  'monica@example.com',
-  'ura@example.com',
-  'ojas@example.com'
-];
+[`supabase/seed.sql`](supabase/seed.sql) gives everyone habits and about three weeks of
+plausible history, including an avoidance habit, an excused day, an at-risk item, a
+nudge and some reactions. Development only — don't run it on the project you actually
+use.
+
+---
+
+## Upgrading an existing deployment
+
+If you already have Phase 1 running with real data, you only need migration **3**.
+
+It is purely additive and has been tested against a populated database:
+
+- No column is dropped and no row is rewritten destructively.
+- Every existing habit becomes `kind = 'do'` and `nudge_policy = 'anytime'`.
+- Existing profiles, groups, memberships, habits and check-ins are untouched, and
+  existing streaks are unchanged.
+- New tables start empty; nothing needs recreating.
+
+Run it in the SQL editor, then redeploy the frontend. Nothing else changes.
+
+---
+
+## Web Push
+
+Real Web Push: a service worker, the Push API, VAPID, and a Supabase Edge Function that
+does the sending. No third-party notification service.
+
+### 1. Generate VAPID keys (once)
+
+```bash
+npm run vapid
 ```
 
-…and run the whole file in the SQL editor. It creates the group, adds the three
-accounts, and prints the resulting membership so you can check it. It is safe to re-run
-— for example after a fourth person signs up.
+This prints a **public** key and a **private** key.
 
-Refresh the app and you are in.
+- The **public** key goes in the frontend. It is compiled into the bundle and is meant
+  to be visible — it is what browsers encrypt to.
+- The **private** key goes **only** into a Supabase secret. Anyone holding it can push
+  notifications to your users. Never commit it, never put it in a `VITE_` variable.
 
-> **Why is this a manual step?** The client has no `INSERT` policy on `groups` or
-> `group_members` at all. There is deliberately no way to create or join a group from
-> the browser, which means a stranger who signs up cannot reach your data no matter
-> what they try. Membership is an admin action, run from an already-authenticated SQL
-> editor.
+### 2. Configure
 
-### 6. Optional: seed some history
+Add the public key to `.env` and to your GitHub repository secrets:
 
-[`supabase/seed.sql`](supabase/seed.sql) gives everyone in the group a handful of
-habits and about three weeks of plausible check-ins, so the screens have something to
-show while you are working on them. Run it in the SQL editor after `bootstrap.sql`.
+```
+VITE_VAPID_PUBLIC_KEY=<public key>
+```
 
-It is re-runnable (it skips habits that already exist), and the last line of the file
-shows how to remove everything it created.
+Set the server-side secrets:
 
-The sample people and habits are illustrative only — nothing in the app knows anything
-about them.
+```bash
+npx supabase secrets set \
+  VAPID_PUBLIC_KEY=<public key> \
+  VAPID_PRIVATE_KEY=<private key> \
+  VAPID_SUBJECT=mailto:you@example.com
+```
+
+### 3. Deploy the function
+
+```bash
+npx supabase functions deploy send-push
+```
+
+### How it works
+
+```
+tap Nudge
+   │
+   ▼
+send_nudge() RPC          ← validates everything, stores nudge + activity event
+   │                        (this is the part that must not fail)
+   ▼
+send-push Edge Function   ← best-effort
+   ├── authenticates the caller's JWT
+   ├── verifies they are actually the actor of that row
+   ├── checks the RECIPIENT's notification preferences
+   ├── loads their subscriptions with the service-role key
+   └── sends Web Push, deleting any endpoint that returns 404/410
+```
+
+The properties that matter:
+
+- **The social action is already committed** before push is attempted. A failed push
+  never undoes a nudge; the app just shows it as normal.
+- **The function takes a row id, never a message.** All notification text is built
+  server-side from the database, so it cannot be used as a relay to push arbitrary
+  text at people.
+- **It verifies the caller is the actor** of that specific nudge / at-risk marker /
+  reaction. A valid login for an unrelated account gets a 403.
+- **Preferences are honoured server-side**, including `show_habit_names` — these land
+  on lock screens, so hiding a name in the UI after sending it would be pointless.
+- **No secret ever reaches the browser.**
+
+---
+
+## Try it locally without a Supabase account
+
+One command, if you have Docker:
+
+```bash
+npm run dev:local
+```
+
+Then `npm run dev`. Sign in as `monica@example.com`, `ura@example.com` or
+`ojas@example.com`, password `password123`.
+
+Monica has a **private** habit ("Therapy") and a private avoidance habit. Sign in as
+Ura and you will not find either — not on Today, not in the feed, not by URL, not in
+the network responses.
+
+- **Supabase Studio** — <http://127.0.0.1:54323>
+- **Inbox** — <http://127.0.0.1:54324>
+
+```bash
+npx supabase stop
+```
+
+[`scripts/dev-local.sh`](scripts/dev-local.sh) refuses to run against anything not on
+localhost, so it cannot create demo accounts in your real project.
 
 ---
 
 ## Deploying to GitHub Pages
 
-**1. Add the repository secrets.** In your repo: **Settings → Secrets and variables →
-Actions → New repository secret**. Add both:
+Repository secrets (**Settings → Secrets and variables → Actions**):
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `VITE_VAPID_PUBLIC_KEY` *(optional — without it the app works, just without push)*
 
-(Same values as your `.env`. They are used as build inputs, not because they are
-sensitive — see below.)
+**Settings → Pages → Source: GitHub Actions**, then push to `main`. The workflow
+typechecks, lints, runs the unit tests, builds, and deploys — a failure at any step
+stops the deployment.
 
-**2. Turn on Pages.** **Settings → Pages → Build and deployment → Source: GitHub
-Actions**.
+### The subpath
 
-**3. Push to `main`.** [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-typechecks, runs the unit tests, builds, and deploys. A failing typecheck or test stops
-the deployment, so a broken build never reaches anyone's phone. You can also re-run it
-by hand from the **Actions** tab.
+GitHub Pages serves from `/<repo>/`, not `/`. Three things depend on that:
 
-Your app appears at `https://<username>.github.io/<repo>/`.
-
-**Add it to a Home Screen.** In iOS Safari, tap Share → *Add to Home Screen*. It
-launches standalone, with its own icon and no browser chrome.
-
-### How the subpath is handled
-
-GitHub Pages serves from `/<repo>/`, not `/`. Two things make that work:
-
-- **Asset paths.** The workflow sets `VITE_BASE_PATH=/${{ github.event.repository.name }}/`,
-  which Vite uses as its `base`. It is derived from the repo name, so renaming or
-  forking the repository needs no code change. Local builds default to `/`.
-- **Routing.** The app uses `HashRouter`, so URLs look like
-  `https://user.github.io/habits/#/week`. GitHub Pages cannot rewrite unknown paths to
-  `index.html`, so with a normal router a refresh on `/week` would 404. The usual
-  workaround is a `404.html` that reconstructs the URL in JavaScript, which adds a
-  redirect flash and one more thing to maintain. Hash routing simply cannot break, and
-  refreshing or deep-linking any screen works.
+- **Assets.** The workflow sets `VITE_BASE_PATH=/${{ github.event.repository.name }}/`,
+  derived from the repo name so renaming or forking needs no code change.
+- **Routing.** `HashRouter`, so `…/habit-tracker/#/week` works on refresh and on deep
+  links. Pages cannot rewrite unknown paths to `index.html`, so a normal router would
+  404.
+- **The service worker.** Registered as `${import.meta.env.BASE_URL}sw.js` with a
+  matching scope, and every URL it builds internally is resolved against
+  `self.registration.scope`. A hard-coded `/sw.js` would register at the wrong scope
+  and silently never receive a push. There are tests for this.
 
 ---
 
@@ -210,60 +307,55 @@ GitHub Pages serves from `/<repo>/`, not `/`. Two things make that work:
 | --- | --- | --- |
 | `VITE_SUPABASE_URL` | Bundle, GitHub Pages | **Yes** |
 | `VITE_SUPABASE_ANON_KEY` | Bundle, GitHub Pages | **Yes** |
-| `service_role` key | **Nowhere in this repo** | **Never** |
-| Database password | **Nowhere in this repo** | **Never** |
-| JWT secret | **Nowhere in this repo** | **Never** |
+| `VITE_VAPID_PUBLIC_KEY` | Bundle, GitHub Pages | **Yes** |
+| `VAPID_PRIVATE_KEY` | Supabase secret only | **Never** |
+| `service_role` key | Supabase (managed) only | **Never** |
+| Database password / JWT secret | Nowhere in this repo | **Never** |
 
 Anything prefixed `VITE_` is compiled into the JavaScript that ships to GitHub Pages.
 Assume anyone can read it, because they can.
 
-That is fine for the URL and anon key. The anon key identifies the project; it does not
-grant access. What a request may actually read or write is decided by the RLS policies,
-evaluated per request against the caller's JWT. An anon key with no valid session gets
-nothing — the tests confirm it is refused before policies are even consulted.
+That is fine for the first three. The anon key identifies the project; it does not
+grant access — RLS decides what any request may read or write. The VAPID public key is
+by design the half browsers encrypt to.
 
-The **service-role key is different**: it bypasses RLS entirely. It must never appear
-in `.env`, in any `VITE_` variable, in `src/`, or in a GitHub Actions build step for
-this app. Nothing here needs it. Admin SQL runs in the Supabase dashboard's SQL editor,
-which is already authenticated.
+The **VAPID private key** and the **service-role key** are different: either one is
+enough to bypass a boundary. They belong in Supabase secrets, which the Edge Function
+reads server-side.
 
 ---
 
 ## Tests
 
 ```bash
-npm test          # unit tests for the domain logic
-npm run test:rls  # database policy tests (needs Docker)
-npm run typecheck # tsc, no emit
+npm test          # 194 unit tests: domain logic + service worker
+npm run test:rls  # 146 database policy assertions (needs Docker)
+npm run typecheck
+npm run lint
+npm run build
 ```
 
 ### Unit tests
 
-109 tests over `src/domain` — the recurrence, streak, week-boundary and timezone logic.
-No component or network mocking; these are pure functions, which is the point of
-keeping the logic out of the components.
+Pure functions over `src/domain`, plus `public/sw.js` evaluated in a sandbox.
 
-Covered edge cases include: a weekday-only habit across a weekend, a missed scheduled
-day, a weekly target spanning the Monday boundary, a completion at 11:30pm local time,
-DST spring-forward and fall-back in both hemispheres, leap days, year boundaries,
-archived habits, and private habits.
+Covered: weekday-only habits across weekends, missed days, weekly targets crossing the
+Monday boundary, completions at 11:30pm local, DST in both hemispheres, leap days, year
+boundaries, archived and private habits, excused days (neutral in every direction),
+avoidance streaks (today never counted early, creation-date bound, lapse resets), at-risk
+lifecycle and expiry, and every nudge-eligibility rule including the cooldown.
 
 ### Database policy tests
 
-`npm run test:rls` spins up a throwaway Postgres container, applies a small shim that
-fakes Supabase's `auth` schema and roles, runs the **real, unmodified migration** on
-top, and then asserts against it while impersonating users exactly the way PostgREST
-does. Roughly 50 assertions, covering:
+`npm run test:rls` applies the **real, unmodified migrations** to a throwaway Postgres
+and impersonates users exactly as PostgREST does. For every table it asserts what the
+owner, a friend, an unrelated authenticated account, and `anon` can each read and write.
 
-- a friend cannot see a private habit, or reach it by explicit id
-- a friend cannot see check-ins belonging to a private habit
-- an unrelated authenticated account sees nothing at all from the group
-- an unauthenticated request is refused at the grant level
-- nobody can check off, edit or delete someone else's habit
-- nobody can create a group or add themselves to one
-- owners *can* do all of those things to their own
-
-See [`supabase/tests/README.md`](supabase/tests/README.md).
+Specifically including: private habits (and their day states, lapses and check-ins)
+being unreachable even by explicit id; nudge cooldown, policy and self-nudge rules
+being unbypassable via direct RPC calls; activity events being unforgeable and
+immutable from the client; a habit turning private deleting its social trail; and a
+friend being unable to read anyone's push subscription.
 
 ---
 
@@ -271,70 +363,139 @@ See [`supabase/tests/README.md`](supabase/tests/README.md).
 
 ```
 src/
-  domain/        Pure business logic. No React, no network. All the tests live here.
+  domain/        Pure logic. No React, no network. Where the tests live.
     dates.ts       Timezone-aware calendar maths (Luxon).
+    dayState.ts    What one habit-day means: done/clean/still-going/lapsed/
+                   excused/pending/missed/off.
     recurrence.ts  Is it due? How is the week going?
-    streaks.ts     Scheduled streaks, weekly consistency, history summaries.
+    streaks.ts     Scheduled streaks, avoidance streaks, weekly consistency.
+    nudges.ts      Nudge eligibility — a MIRROR of the SQL rules, not the enforcement.
     status.ts      View models for Today and Week.
-  services/      Every Supabase query in the app. Nothing else talks to the database.
-  hooks/         useAuth (session) and useAppData (the single data load + writes).
-  components/    Reusable UI: rows, buttons, layout, form, toast.
-  screens/       One file per screen. Thin — they arrange domain output.
-  types/         Shared model types.
+  services/      Every Supabase query. Nothing else talks to the database.
+  hooks/         useAuth, useAppData (one load + all writes), useActivity (the feed).
+  lib/           supabase client, Web Push plumbing.
+  components/    Reusable UI: rows, sheets, buttons, toasts, forms.
+  screens/       One file per screen. Thin.
+
+public/sw.js     Service worker: push, notification clicks, static-asset caching.
 
 supabase/
-  migrations/    The versioned schema. One file, complete.
+  migrations/    Versioned schema. Run in filename order.
+  functions/     send-push Edge Function.
   bootstrap.sql  One-time: create the group, add the three people.
-  seed.sql       Optional development data.
-  tests/         RLS test suite (see above).
+  seed.sql       Development data.
+  tests/         RLS suites.
 ```
 
 **Data flow.** `useAppData` loads everything once — profile, group, members, habits,
-check-ins — and holds it. Screens read from it and derive what they need through
-`domain/`. Writes go through the same hook, so an optimistic update and its rollback
-sit next to the state they touch.
+check-ins, day states, recent sent nudges — and holds it. Screens derive what they need
+through `domain/`. Writes go through the same hook, so an optimistic update and its
+rollback sit next to the state they touch. The feed is separate (`useActivity`) because
+it is paginated and only one tab.
 
-**Two queries for check-ins**, not one: your own habits get a long window (streaks are
-computed from it), while friends' habits get just the current week, which is all their
-cards show. It keeps the payload small on a phone.
+**Realtime** is a "something changed, refetch" signal for `habit_checkins`, `habits`,
+`habit_days`, `activity_events` and `event_reactions`. The payload is never trusted or
+merged; RLS decides what the refetch returns. `push_subscriptions` is deliberately
+**not** in the publication.
 
-**Realtime** subscribes to `habits` and `habit_checkins` purely as a *something
-changed* signal — the payload is never trusted or merged, it just triggers a debounced
-refetch. RLS then decides what comes back, exactly as on first load.
+**Server-side rules.** Anything that must not be bypassable from devtools is a
+`SECURITY DEFINER` RPC with narrow inputs, a pinned empty `search_path`, and an
+explicit authorisation check: `send_nudge`, `mark_at_risk`, `clear_at_risk`,
+`set_excused`, `set_lapse`. Activity events are written only by those functions and by
+a trigger on `habit_checkins` — `authenticated` has no INSERT grant on the table at all.
+
+---
+
+## Semantics that are easy to get wrong
+
+These are the rules the tests exist to protect.
+
+### Excused days are neutral
+
+A Monday–Friday habit:
+
+```
+Mon ✓   Tue ✓   Wed ❄️ excused   Thu ✓   Fri ✓
+```
+
+The streak is **4**. Wednesday does not increase it and does not break it. It is also
+removed from the consistency denominator, so being ill does not make the month look
+worse. It never counts as completed.
+
+Weekly-target habits do **not** get per-day excuses — their semantics are week-level,
+and the database rejects the attempt.
+
+### Avoidance days are only won once they end
+
+A daily avoidance habit with 12 clean finished days and no lapse yet today shows:
+
+```
+🔥 12 days • still going today
+```
+
+Never 13. If today ends clean it becomes 13 tomorrow; if a slip is logged, the streak
+restarts. Excused days are neutral here too.
+
+Avoidance streaks are bounded by the habit's creation date — success is the *absence*
+of a record, so without that bound a habit created yesterday would appear to have an
+unbroken streak stretching back forever. Recorded evidence (a check-in, a lapse, an
+excuse) always overrides that bound, so a backfilled or edited habit never loses
+visible history.
+
+### At-risk belongs to one local day
+
+It is set for the owner's local date, computed **server-side** from their timezone. It
+resolves when the habit is completed, excused, the weekly target is met, the owner
+clears it, or a slip is logged — and it stops being current when that person's day
+ends. Historical activity stays in the feed.
+
+### Nudge rules
+
+A nudge is allowed only when the sender is a group member, the habit belongs to the
+recipient, is shared, active, relevant today, not already satisfied, not excused, the
+owner's policy permits it right now, and the sender has not nudged that habit within
+two hours. Avoidance habits can be encouraged while the day is going, but **not** after
+a slip is logged — piling on is exactly what this app should not do.
+
+All of it is enforced in `send_nudge()`. `src/domain/nudges.ts` mirrors it so the UI
+does not show buttons the server would reject; if they ever disagree, the server wins.
+Every policy refusal reports the same opaque reason, so a friend cannot read the
+interface to learn someone's settings.
 
 ---
 
 ## Security model
 
 The frontend is public static code. Anyone can read it, change it in devtools, or skip
-it entirely and call the API directly. So none of the security lives there.
+it entirely. None of the security lives there.
 
-**Everything is enforced by Row Level Security**, in
-[`supabase/migrations/20260816000000_init.sql`](supabase/migrations/20260816000000_init.sql).
-Every table has RLS enabled and explicit policies; with no policy matching, a read
+**Every table has RLS enabled with explicit policies.** With no policy matching, a read
 returns zero rows and a write is rejected. The default is deny.
 
-The guarantees:
+- **Private habits are private.** A private habit's name, emoji, existence, check-ins,
+  day states, lapses and at-risk markers are unreachable by anyone but its owner. It
+  produces no activity events, cannot be nudged, and cannot appear in a push payload.
+  Turning a shared habit private deletes its past events and nudges.
+- **You cannot touch anyone else's data.** Habits, check-ins and day states are
+  writable only by their owner. Marking a friend's habit complete fails twice over: the
+  policy rejects a forged `user_id`, and a composite foreign key on
+  `habits(id, owner_id)` rejects your own `user_id` paired with their habit — which
+  holds even for a service-role client.
+- **Social actions cannot be forged.** `nudges` and `activity_events` have no INSERT
+  grant for `authenticated`; the only way in is through the validating RPCs, which take
+  no actor argument and read it from `auth.uid()`.
+- **Push subscriptions are owner-only.** A friend cannot read another person's endpoint
+  or keys — holding them would be enough to push to that device directly. The table is
+  not in the realtime publication.
+- **Strangers get nothing.** An authenticated account outside the group sees zero
+  habits, check-ins, day states, events, reactions, preferences and subscriptions. An
+  unauthenticated request is refused at the grant level, before policies.
 
-- **Private habits are private.** A habit is readable only by its owner, or if it is
-  `shared` and lives in a group you belong to. Another person's private habit — its
-  name, its emoji, its existence — never reaches your browser. The UI does not filter
-  private habits out; it never receives them.
-- **You cannot touch anyone else's data.** Habits and check-ins are writable only by
-  their owner. Marking a friend's habit complete fails twice over: the RLS policy
-  rejects a forged `user_id`, and a composite foreign key on `habits(id, owner_id)`
-  rejects your own `user_id` paired with their habit. That second one holds even for a
-  service-role client that bypasses policies entirely.
-- **Strangers get nothing.** An authenticated account outside your group sees zero
-  habits, check-ins, profiles and memberships. An unauthenticated request is refused
-  before any policy runs, because `anon` has had its table privileges revoked.
-- **Groups are closed.** The client has no way to create a group or join one.
-
-Two small helper functions (`my_group_ids`, `shares_group_with`) are `SECURITY
-DEFINER`. That is deliberate: a policy on `group_members` that queries `group_members`
-would recurse infinitely, and running that one lookup as the definer breaks the cycle.
-They take no free-form input, compare only against `auth.uid()`, run with an empty
-`search_path`, and are not executable by `anon`.
+The `SECURITY DEFINER` helpers (`my_group_ids`, `shares_group_with`, `owner_today`,
+`owner_local_time`, `scheduled_streak_at`) exist because a policy on `group_members`
+that queries `group_members` would recurse. They take no free-form input, pin
+`search_path` to `''`, and the internal ones are not granted to `authenticated` at all
+— `owner_local_time` would otherwise leak a friend's wall-clock time.
 
 All of the above is asserted by `npm run test:rls`.
 
@@ -342,98 +503,76 @@ All of the above is asserted by `npm run test:rls`.
 
 ## Design decisions
 
-**Dates are local calendar days, never UTC days.** Each person's profile carries an
-IANA timezone, and every "is it due", "what is today", "which week", and streak
-question is answered in the *habit owner's* zone. A habit checked off at 11:30pm in New
-York belongs to that day. Timestamps are still stored normally for auditing, but the
-logical `completion_date` is modelled explicitly as a `date`. Luxon does the arithmetic
-— no hand-rolled offset maths.
+**Day state is one table, not three.** `habit_days` holds excused, lapsed and at-risk
+because they are all "a fact about this habit on this local date", all owned by the
+habit owner, and at most one row per habit-day is ever needed. Three tables would have
+meant three joins and three near-identical policy sets. Completions stay in
+`habit_checkins` — that table already existed in production and moving it would have
+been a destructive rewrite for no benefit.
 
-**Weekdays are ISO-8601 everywhere**: 1 = Monday … 7 = Sunday, in the database, the
-domain logic and the UI. It matches Luxon's `DateTime.weekday`, so nothing ever
-converts. Weeks run Monday–Sunday, isolated in one constant so it can become a setting
-later.
+**Habit kind is separate from recurrence.** "How often" and "what winning means" are
+different questions. Conflating them is how you end up asking someone to tick a box
+every night to confirm they did not order takeout.
 
-**`scheduled_days` is a `smallint[]`, not a join table.** The spec offered a normalised
-`habit_schedule_days`, but for a set of at most seven small integers that is a join and
-a second write on every edit, in exchange for nothing. A check constraint enforces that
-the array is sorted, distinct, and within 1–7, so it cannot drift.
+**Today is not re-sorted when you check something off.** Rows jumping under your finger
+mid-tap is worse than seeing completed items in place. The one exception is a *friend's*
+card, where at-risk items float to the top — those rows carry no tap targets that could
+shift.
 
-**Today is not re-sorted when you check something off.** Rows jumping out from under
-your finger mid-tap is worse than seeing completed items in place, so the order is
-stable (oldest habit first).
+**Avoidance habits have no tick box.** A badge, and a "I slipped today" action in the
+sheet. The core semantic is that a scheduled day succeeds by ending quietly.
 
-**A weekly habit that has hit its target reads as done** on the remaining days of the
-week, rather than sitting unchecked and looking like a reproach.
+**No feed item for lapses.** The spec allowed it; a shame feed is the obvious failure
+mode of this whole feature. The status shows on Today, which is enough.
 
-**A scheduled day that is *today and not yet done* is pending, not missed.** Without
-that rule every streak in the app would read zero each morning.
+**Custom nudge text stays between two people.** The feed says "Monica nudged Ojas about
+Read" and shows a preset label if one was used, never a custom message.
 
-**Three tabs, not four.** The Activity feed is a later phase, and an empty "coming
-later" tab would be permanent clutter in an app this small.
+**Colour is never the only signal.** Every calendar cell, week cell and status has a
+text or screen-reader label, and the detail calendar carries a legend.
 
-**Archive, don't delete.** Archiving keeps all history and just removes the habit from
-Today and Week. Permanent deletion exists but sits behind a two-step confirmation that
-names how many check-ins will go with it.
-
-**Email + password, not magic links.** It works identically under a GitHub Pages
-subpath, needs no redirect-URL configuration, and does not depend on a link opening in
-the same browser it was requested from — which on iOS is a real source of friction.
+**Email + password, not magic links.** Works identically under a subpath, needs no
+redirect configuration, and does not depend on a link opening in the same browser —
+which on iOS is a real source of friction.
 
 ---
 
-## Try it locally without a Supabase account
+## Installing on an iPhone
 
-If you have Docker, one command gives you the whole thing — a local Supabase stack,
-three demo accounts, a group, and a few weeks of history — without touching any real
-project:
+1. Open <https://monicakodwani.github.io/habit-tracker/> in Safari.
+2. Share → **Add to Home Screen**.
+3. Open it from the Home Screen (not Safari).
+4. **Me → Notifications → Enable**, and allow when iOS asks.
 
-```bash
-npm run dev:local
-```
-
-Then:
-
-```bash
-npm run dev
-```
-
-Sign in as any of `monica@example.com`, `ura@example.com` or `ojas@example.com`,
-password `password123`.
-
-Monica has a **private** habit called *Therapy*. Sign in as Ura and you will not find
-it anywhere — not on Today, not by URL, and not in the network responses. That is the
-privacy boundary, enforced by database policy rather than by the UI.
-
-Also available while it runs:
-
-- **Supabase Studio** — <http://127.0.0.1:54323> (browse the tables, watch check-ins land)
-- **Inbox** — <http://127.0.0.1:54324> (any auth emails)
-
-When you are done:
-
-```bash
-npx supabase stop
-```
-
-[`scripts/dev-local.sh`](scripts/dev-local.sh) refuses to run against anything that is
-not on localhost, so it cannot create demo accounts in your real project.
-
-Seeding on `supabase start` is turned off in `supabase/config.toml` on purpose: both
-`bootstrap.sql` and `seed.sql` look accounts up by email, so they cannot run before
-anyone has signed up.
-
-> Rebuilding the local database while a browser tab still holds a session from the
-> previous one leaves that tab with a token for a user that no longer exists. The app
-> detects this and says so, with a Sign out button — that is expected, not a bug.
+Step 3 matters: iOS only allows Web Push for an installed web app. Until then the app
+says so rather than showing a button that would silently fail. Everything else works
+normally in Safari.
 
 ---
 
-## Not built yet
+## Known limitations
 
-Deliberately out of scope for now, though the schema leaves room for them: nudges, push
-notifications, "at risk" status, grace/excused days, reactions, an activity feed, and
-avoidance habits (which need different success semantics and should be designed
-separately).
+- **iOS requires Home Screen installation for push.** An Apple platform rule, not
+  something the app can work around. Detected and explained in the UI.
+- **Notification action buttons are not implemented.** A reliable push that opens the
+  right screen was the priority; per-platform action buttons are inconsistent enough to
+  be worse than nothing.
+- **Streaks are computed from a 400-day window** of check-ins on Today and Week. The
+  habit detail screen fetches that habit's full history, so a longer streak is exact
+  there.
+- **No offline writes.** The static shell is cached so the app opens without a
+  connection, but actions need the network and roll back with an error if they fail.
+- **The feed's streak decoration is computed in SQL** (`scheduled_streak_at`), which
+  mirrors the TypeScript logic rather than sharing it. The two are covered by separate
+  tests.
 
-None of these are faked or stubbed anywhere in the code.
+---
+
+## Not built
+
+Deliberately out of scope: chat, comments, DMs, public accounts, friend discovery,
+followers, group management UI, badges, points, XP, subscriptions, AI anything, mood
+tracking, photo evidence, Apple Health, calendars, location, analytics dashboards, and
+admin tooling.
+
+The fun comes from the three people, not the feature count.

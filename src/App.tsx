@@ -14,6 +14,7 @@ import { Screen } from './components/Layout'
 import { AuthScreen } from './screens/AuthScreen'
 import { TodayScreen } from './screens/TodayScreen'
 import { WeekScreen } from './screens/WeekScreen'
+import { ActivityScreen } from './screens/ActivityScreen'
 import { MeScreen } from './screens/MeScreen'
 import { ProfileScreen } from './screens/ProfileScreen'
 import { HabitFormScreen } from './screens/HabitFormScreen'
@@ -55,6 +56,7 @@ function SignedInApp() {
       <Routes>
         <Route path="/" element={<TodayScreen />} />
         <Route path="/week" element={<WeekScreen />} />
+        <Route path="/activity" element={<ActivityScreen />} />
         <Route path="/me" element={<MeScreen />} />
         <Route path="/me/profile" element={<ProfileScreen />} />
         <Route path="/habits/new" element={<HabitFormScreen mode="create" />} />

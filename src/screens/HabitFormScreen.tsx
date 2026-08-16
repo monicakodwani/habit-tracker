@@ -36,10 +36,13 @@ export function HabitFormScreen({ mode }: { mode: 'create' | 'edit' }) {
     ? {
         name: habit.name,
         emoji: habit.emoji,
+        kind: habit.kind,
         recurrence_type: habit.recurrence_type,
         scheduled_days: habit.scheduled_days,
         weekly_target: habit.weekly_target,
         visibility: habit.visibility,
+        nudge_policy: habit.nudge_policy,
+        nudge_after_time: habit.nudge_after_time,
       }
     : BLANK_HABIT
 

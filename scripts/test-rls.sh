@@ -45,4 +45,7 @@ done
 
 echo "Running RLS assertions..."
 # psql writes RAISE NOTICE to stderr; fold it into stdout so results are visible.
-run_sql "$ROOT/supabase/tests/01_rls_test.sql" 2>&1 | sed 's/^psql:[^ ]* //'
+# Every numbered test file runs in order — 02 reuses the fixtures 01 sets up.
+for suite in "$ROOT"/supabase/tests/0[1-9]_*.sql; do
+  run_sql "$suite" 2>&1 | sed 's/^psql:[^ ]* //'
+done

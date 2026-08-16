@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom'
 import { useAppData } from '../hooks/useAppData'
 import { buildWeekRows } from '../domain/status'
 import type { WeekRow } from '../domain/status'
+import type { DayOutcome } from '../domain/dayState'
 import { formatWeekRange, weekDates } from '../domain/dates'
 import { WEEKDAY_INITIALS, WEEKDAYS } from '../types/models'
 import { describeRecurrence } from '../domain/recurrence'
@@ -16,12 +17,12 @@ import { Card, Screen, Section } from '../components/Layout'
 import { ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 
 export function WeekScreen() {
-  const { status, me, habits, checkins, today, zone } = useAppData()
+  const { status, me, habits, checkins, habitDays, today, zone } = useAppData()
 
   const dates = useMemo(() => weekDates(today, zone), [today, zone])
   const rows = useMemo(
-    () => (me ? buildWeekRows(me.id, habits, checkins, dates, today, zone) : []),
-    [me, habits, checkins, dates, today, zone],
+    () => (me ? buildWeekRows(me.id, habits, checkins, dates, today, zone, habitDays) : []),
+    [me, habits, checkins, dates, today, zone, habitDays],
   )
 
   return (
@@ -97,6 +98,16 @@ function HabitWeekRow({ row }: { row: WeekRow }) {
   )
 }
 
+/**
+ * One day cell.
+ *
+ * Renders from the resolved {@link DayOutcome}, not from "was there a check-in" —
+ * an avoidance habit succeeds by the *absence* of a lapse and has no check-ins at
+ * all, so keying off completions would show a perfect week as a blank one.
+ *
+ * The state is always in the accessible label as well as the shape, so colour is
+ * never the only carrier.
+ */
 function DayCell({
   cell,
   habitName,
@@ -106,34 +117,48 @@ function DayCell({
   habitName: string
   isWeekly: boolean
 }) {
-  // A scheduled habit's unscheduled days are shown as a faint dash rather than an
-  // empty circle, so "not due" never looks like "not done".
-  const notApplicable = !isWeekly && !cell.scheduled
+  // A weekly-target habit has no schedule: a day is either a completion or nothing.
+  const outcome: DayOutcome = isWeekly ? (cell.completed ? 'done' : 'off') : cell.outcome
 
-  const label = cell.completed
-    ? 'done'
-    : notApplicable
-      ? 'not scheduled'
-      : cell.isFuture
-        ? 'still to come'
-        : 'missed'
+  const label =
+    outcome === 'done'
+      ? 'done'
+      : outcome === 'clean'
+        ? 'clean'
+        : outcome === 'still-going'
+          ? 'still going'
+          : outcome === 'lapsed'
+            ? 'slip'
+            : outcome === 'excused'
+              ? 'excused'
+              : outcome === 'missed'
+                ? 'missed'
+                : outcome === 'pending'
+                  ? 'still to come'
+                  : 'not scheduled'
 
   const base = 'flex size-7 items-center justify-center rounded-full text-[0.7rem]'
+  const style =
+    outcome === 'done' || outcome === 'clean'
+      ? 'bg-accent text-bg'
+      : outcome === 'lapsed'
+        ? 'bg-danger-soft text-danger'
+        : outcome === 'excused'
+          ? 'border border-dashed border-accent/60 text-accent-ink'
+          : outcome === 'off'
+            ? 'text-ink-faint/50'
+            : outcome === 'pending' || outcome === 'still-going'
+              ? 'border border-dashed border-line'
+              : 'border border-line'
 
   return (
     <span
-      className={`${base} ${
-        cell.completed
-          ? 'bg-accent text-bg'
-          : notApplicable
-            ? 'text-ink-faint/50'
-            : cell.isFuture
-              ? 'border border-dashed border-line'
-              : 'border border-line'
-      } ${cell.isToday ? 'ring-2 ring-accent/35 ring-offset-1 ring-offset-surface' : ''}`}
+      className={`${base} ${style} ${
+        cell.isToday ? 'ring-2 ring-accent/35 ring-offset-1 ring-offset-surface' : ''
+      }`}
     >
       <span className="sr-only">{`${habitName}, ${cell.date}: ${label}`}</span>
-      {cell.completed ? (
+      {outcome === 'done' || outcome === 'clean' ? (
         <svg viewBox="0 0 20 20" aria-hidden="true" className="size-3.5">
           <path
             d="m4.5 10.5 3.5 3.5 7.5-8"
@@ -144,7 +169,11 @@ function DayCell({
             strokeLinejoin="round"
           />
         </svg>
-      ) : notApplicable ? (
+      ) : outcome === 'excused' ? (
+        <span aria-hidden="true" className="text-[0.6rem]">❄</span>
+      ) : outcome === 'lapsed' ? (
+        <span aria-hidden="true" className="text-[0.7rem] font-bold">·</span>
+      ) : outcome === 'off' ? (
         <span aria-hidden="true">·</span>
       ) : null}
     </span>

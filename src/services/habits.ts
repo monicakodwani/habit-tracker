@@ -10,7 +10,7 @@ import { supabase } from '../lib/supabase'
 import type { Habit, HabitDraft } from '../types/models'
 
 const COLUMNS =
-  'id, owner_id, group_id, name, emoji, recurrence_type, scheduled_days, weekly_target, active, visibility, created_at, updated_at'
+  'id, owner_id, group_id, name, emoji, kind, recurrence_type, scheduled_days, weekly_target, active, visibility, nudge_policy, nudge_after_time, created_at, updated_at'
 
 /**
  * Every habit the signed-in user is allowed to see in this group: all of their own
@@ -106,15 +106,36 @@ export async function deleteHabit(habitId: string): Promise<void> {
  * stays a backstop rather than a routine source of errors.
  */
 function normalize(draft: HabitDraft) {
-  const isWeekly = draft.recurrence_type === 'weekly_target'
+  // Avoidance habits are scheduled-days only; the database rejects anything else,
+  // so the coercion happens once here rather than in every form path.
+  const isWeekly = draft.kind === 'do' && draft.recurrence_type === 'weekly_target'
+
+  // A private habit has no accountability settings — nobody can nudge it either way.
+  // Normalising to 'never' keeps the stored value honest rather than leaving a stale
+  // 'anytime' behind after someone makes a habit private.
+  const policy = draft.visibility === 'private' ? 'never' : draft.nudge_policy
+
   return {
     name: draft.name.trim(),
     emoji: draft.emoji.trim() || '✅',
-    recurrence_type: draft.recurrence_type,
+    kind: draft.kind,
+    recurrence_type: isWeekly ? ('weekly_target' as const) : ('scheduled_days' as const),
     scheduled_days: isWeekly
       ? null
       : [...new Set(draft.scheduled_days ?? [])].sort((a, b) => a - b),
     weekly_target: isWeekly ? draft.weekly_target : null,
     visibility: draft.visibility,
+    nudge_policy: policy,
+    // `habits_nudge_time_shape` requires the time exactly when the policy is
+    // 'after_time', and forbids it otherwise.
+    nudge_after_time: policy === 'after_time' ? normalizeTime(draft.nudge_after_time) : null,
   }
+}
+
+/** `HH:MM` from an `<input type="time">` becomes `HH:MM:SS` for Postgres. */
+function normalizeTime(value: string | null): string {
+  const time = (value ?? '').trim()
+  if (/^\d{2}:\d{2}$/.test(time)) return `${time}:00`
+  if (/^\d{2}:\d{2}:\d{2}$/.test(time)) return time
+  return '18:00:00'
 }

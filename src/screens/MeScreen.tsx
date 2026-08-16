@@ -14,6 +14,7 @@ import { describeError } from '../lib/supabase'
 import type { Habit } from '../types/models'
 import { Card, Screen, Section } from '../components/Layout'
 import { Button, ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
+import { NotificationSettings } from '../components/NotificationSettings'
 
 export function MeScreen() {
   const { status, me, group, habits, setHabitActive } = useAppData()
@@ -142,6 +143,12 @@ export function MeScreen() {
         </Section>
       )}
 
+      {me && (
+        <Section title="Notifications">
+          <NotificationSettings userId={me.id} />
+        </Section>
+      )}
+
       <Section title="Settings">
         <Card className="px-4 py-2">
           <Button variant="quiet" full className="justify-start px-0" onClick={() => void signOut()}>
@@ -150,6 +157,7 @@ export function MeScreen() {
         </Card>
         <p className="mt-4 px-1 text-[0.75rem] leading-relaxed text-ink-faint">
           Archiving keeps a habit&rsquo;s history but takes it off Today and Week.
+          An excused day doesn&rsquo;t count as done and doesn&rsquo;t break a streak.
         </p>
       </Section>
     </Screen>

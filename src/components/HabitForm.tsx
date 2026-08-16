@@ -1,14 +1,22 @@
 /**
  * The New Habit / Edit Habit form.
  *
- * Five things only: name, emoji, frequency, visibility, and (when editing) archive.
- * No category, difficulty, colour, tags, description or reminders — the spec is
- * explicit that this form stays short, and a short form is what makes adding a habit
- * a ten-second decision rather than a small project.
+ * Still deliberately short: what it is, how often, who sees it, and — for shared
+ * habits — how much your friends are allowed to bother you about it. No category,
+ * difficulty, colour, tags, description or reminders.
+ *
+ * The accountability section only appears for shared habits, because a private habit
+ * cannot be nudged by anyone under any setting.
  */
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { HabitDraft, HabitVisibility, Weekday } from '../types/models'
+import type {
+  HabitDraft,
+  HabitKind,
+  HabitVisibility,
+  NudgePolicy,
+  Weekday,
+} from '../types/models'
 import { WEEKDAY_INITIALS, WEEKDAY_NAMES, WEEKDAYS } from '../types/models'
 import { Button, ErrorText, Field, INPUT_CLASS } from './ui'
 
@@ -17,7 +25,8 @@ type Frequency = 'daily' | 'days' | 'weekly'
 
 const EVERY_DAY: Weekday[] = [1, 2, 3, 4, 5, 6, 7]
 
-const EMOJI_SUGGESTIONS = ['📖', '💊', '🚶', '🏋️', '🧘', '💻', '📓', '✏️', '🎹', '🥗', '💧', '🌙']
+const DO_EMOJI = ['📖', '💊', '🚶', '🏋️', '🧘', '💻', '📓', '✏️', '🎹', '🥗', '💧', '🌙']
+const AVOID_EMOJI = ['🍟', '🥤', '📱', '☕️', '🚬', '🍰', '🛒', '🌙', '🎰', '🍺', '💸', '📺']
 
 function frequencyOf(draft: HabitDraft): Frequency {
   if (draft.recurrence_type === 'weekly_target') return 'weekly'
@@ -28,10 +37,13 @@ function frequencyOf(draft: HabitDraft): Frequency {
 export const BLANK_HABIT: HabitDraft = {
   name: '',
   emoji: '✅',
+  kind: 'do',
   recurrence_type: 'scheduled_days',
   scheduled_days: EVERY_DAY,
   weekly_target: null,
   visibility: 'shared',
+  nudge_policy: 'anytime',
+  nudge_after_time: null,
 }
 
 interface HabitFormProps {
@@ -43,16 +55,29 @@ interface HabitFormProps {
 export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
   const [name, setName] = useState(initial.name)
   const [emoji, setEmoji] = useState(initial.emoji)
+  const [kind, setKind] = useState<HabitKind>(initial.kind)
   const [frequency, setFrequency] = useState<Frequency>(() => frequencyOf(initial))
-  const [days, setDays] = useState<Weekday[]>(
-    () => initial.scheduled_days ?? [1, 2, 3, 4, 5],
-  )
+  const [days, setDays] = useState<Weekday[]>(() => initial.scheduled_days ?? [1, 2, 3, 4, 5])
   const [weeklyTarget, setWeeklyTarget] = useState(initial.weekly_target ?? 3)
   const [visibility, setVisibility] = useState<HabitVisibility>(initial.visibility)
+  const [nudgePolicy, setNudgePolicy] = useState<NudgePolicy>(
+    initial.visibility === 'private' ? 'anytime' : initial.nudge_policy,
+  )
+  const [nudgeTime, setNudgeTime] = useState((initial.nudge_after_time ?? '18:00').slice(0, 5))
 
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const daysLabelId = useId()
+
+  const isAvoid = kind === 'avoid'
+  const emojiChoices = isAvoid ? AVOID_EMOJI : DO_EMOJI
+
+  function chooseKind(next: HabitKind) {
+    setKind(next)
+    // "Avoid takeout 3 times a week" has no coherent meaning, so an avoidance habit
+    // falls back to a daily schedule rather than leaving an impossible selection.
+    if (next === 'avoid' && frequency === 'weekly') setFrequency('daily')
+  }
 
   function toggleDay(day: Weekday) {
     setDays((current) =>
@@ -77,14 +102,19 @@ export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
       return
     }
 
-    const isWeekly = frequency === 'weekly'
+    const isWeekly = !isAvoid && frequency === 'weekly'
     const draft: HabitDraft = {
       name: name.trim(),
       emoji: emoji.trim() || '✅',
+      kind,
       recurrence_type: isWeekly ? 'weekly_target' : 'scheduled_days',
       scheduled_days: isWeekly ? null : frequency === 'daily' ? EVERY_DAY : days,
       weekly_target: isWeekly ? weeklyTarget : null,
       visibility,
+      // A private habit cannot be nudged by anyone, so its stored policy is 'never'
+      // rather than a stale value left over from when it was shared.
+      nudge_policy: visibility === 'private' ? 'never' : nudgePolicy,
+      nudge_after_time: nudgePolicy === 'after_time' ? nudgeTime : null,
     }
 
     setSubmitting(true)
@@ -100,12 +130,30 @@ export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
 
   return (
     <form onSubmit={handleSubmit} noValidate className="space-y-7">
+      <fieldset>
+        <legend className="mb-2 text-sm font-semibold text-ink">I want to…</legend>
+        <Segmented
+          value={kind}
+          onChange={chooseKind}
+          options={[
+            { value: 'do', label: 'Do something' },
+            { value: 'avoid', label: 'Avoid something' },
+          ]}
+        />
+        {isAvoid && (
+          <p className="mt-2 text-[0.78rem] leading-relaxed text-ink-faint">
+            A day counts as a win once it ends without a slip — there&rsquo;s nothing to
+            tick off.
+          </p>
+        )}
+      </fieldset>
+
       <Field label="Name">
         <input
           className={INPUT_CLASS}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Read"
+          placeholder={isAvoid ? 'No takeout' : 'Read'}
           maxLength={60}
           enterKeyHint="done"
           autoCapitalize="sentences"
@@ -127,7 +175,7 @@ export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
             />
           </div>
           <ul className="flex min-w-0 flex-1 flex-wrap gap-1">
-            {EMOJI_SUGGESTIONS.map((choice) => (
+            {emojiChoices.map((choice) => (
               <li key={choice}>
                 <button
                   type="button"
@@ -151,11 +199,18 @@ export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
         <Segmented
           value={frequency}
           onChange={setFrequency}
-          options={[
-            { value: 'daily', label: 'Every day' },
-            { value: 'days', label: 'Certain days' },
-            { value: 'weekly', label: 'X per week' },
-          ]}
+          options={
+            isAvoid
+              ? [
+                  { value: 'daily', label: 'Every day' },
+                  { value: 'days', label: 'Certain days' },
+                ]
+              : [
+                  { value: 'daily', label: 'Every day' },
+                  { value: 'days', label: 'Certain days' },
+                  { value: 'weekly', label: 'X per week' },
+                ]
+          }
         />
 
         {frequency === 'days' && (
@@ -190,7 +245,7 @@ export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
           </div>
         )}
 
-        {frequency === 'weekly' && (
+        {frequency === 'weekly' && !isAvoid && (
           <div className="mt-4">
             <p className="mb-2 text-[0.82rem] text-ink-soft">How many times each week?</p>
             <ul className="flex justify-between gap-1.5">
@@ -229,9 +284,66 @@ export function HabitForm({ initial, submitLabel, onSubmit }: HabitFormProps) {
         <p className="mt-2 text-[0.78rem] leading-relaxed text-ink-faint">
           {visibility === 'shared'
             ? 'Your group can see this habit and whether you’ve done it.'
-            : 'Only you can see this — not even its name leaves your account.'}
+            : 'Only you can see this — not even its name leaves your account. Nobody can nudge it.'}
         </p>
       </fieldset>
+
+      {/*
+        Accountability only exists for shared habits. Rendering it for a private habit
+        would imply a setting that has no effect: nobody can nudge a private habit
+        under any policy, and the database enforces that independently.
+      */}
+      {visibility === 'shared' && (
+        <fieldset>
+          <legend className="mb-1 text-sm font-semibold text-ink">Accountability</legend>
+          <p className="mb-2 text-[0.78rem] text-ink-soft">Friends can nudge me…</p>
+          <div className="space-y-1.5">
+            {(
+              [
+                ['anytime', 'Anytime'],
+                ['after_time', 'After a time'],
+                ['at_risk_only', 'Only when I ask for a push'],
+                ['never', 'Never'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setNudgePolicy(value)}
+                aria-pressed={nudgePolicy === value}
+                className={`flex min-h-12 w-full items-center gap-3 rounded-xl border px-4 text-left text-[0.9rem] transition-colors ${
+                  nudgePolicy === value
+                    ? 'border-accent bg-accent-soft font-semibold text-ink'
+                    : 'border-line bg-surface text-ink-soft hover:bg-sunken'
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`flex size-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                    nudgePolicy === value ? 'border-accent bg-accent' : 'border-line'
+                  }`}
+                >
+                  <span className="size-1.5 rounded-full bg-bg" />
+                </span>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {nudgePolicy === 'after_time' && (
+            <label className="mt-3 flex items-center gap-3">
+              <span className="text-[0.85rem] text-ink-soft">Not before</span>
+              <input
+                type="time"
+                className={`${INPUT_CLASS} w-auto`}
+                value={nudgeTime}
+                onChange={(e) => setNudgeTime(e.target.value)}
+              />
+              <span className="text-[0.78rem] text-ink-faint">your time</span>
+            </label>
+          )}
+        </fieldset>
+      )}
 
       {error && <ErrorText>{error}</ErrorText>}
 
@@ -250,7 +362,7 @@ function Segmented<T extends string>({
 }: {
   value: T
   onChange: (value: T) => void
-  options: { value: T; label: string }[]
+  options: readonly { value: T; label: string }[]
 }) {
   return (
     <div className="flex gap-1.5 rounded-2xl bg-sunken p-1.5">

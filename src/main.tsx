@@ -2,7 +2,22 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { HashRouter } from 'react-router-dom'
 import { App } from './App'
+import { registerServiceWorker } from './lib/push'
 import './index.css'
+
+/*
+ * Register the service worker for offline shell caching and push delivery.
+ *
+ * Registering is NOT the same as asking for notification permission — that only ever
+ * happens from a tap in Me → Notifications. This just installs the worker so it is
+ * ready if and when someone enables them.
+ *
+ * Deliberately fire-and-forget and after load: a registration failure (private
+ * browsing, an unsupported browser, a blocked scope) must never stop the app booting.
+ */
+if (import.meta.env.PROD) {
+  window.addEventListener('load', () => void registerServiceWorker())
+}
 
 /*
  * HashRouter, not BrowserRouter.

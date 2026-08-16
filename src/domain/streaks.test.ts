@@ -10,11 +10,16 @@ import {
 import {
   EVERY_DAY,
   WEEKDAYS_ONLY,
+  avoidHabit,
   checkinsOn,
   d,
+  excusedOn,
+  habitDay,
+  lapsedOn,
   scheduledHabit,
   weeklyHabit,
 } from './testFixtures'
+import { avoidStreak } from './streaks'
 
 const NY = 'America/New_York'
 
@@ -204,6 +209,158 @@ describe('scheduledStreak — edge cases', () => {
   })
 })
 
+describe('scheduledStreak — excused days are neutral', () => {
+  it('keeps a Mon–Fri streak alive across an excused Wednesday', () => {
+    // The exact example from the spec: Mon ✓ Tue ✓ Wed ❄️ Thu ✓ Fri ✓ is a streak of
+    // four completed occurrences — Wednesday neither counts nor breaks.
+    const habit = scheduledHabit(WEEKDAYS_ONLY)
+    const checkins = checkinsOn(habit, ['2026-08-10', '2026-08-11', '2026-08-13', '2026-08-14'])
+    const days = excusedOn(habit, ['2026-08-12'])
+
+    expect(scheduledStreak(habit, checkins, d('2026-08-14'), NY, days)).toEqual({
+      current: 4,
+      longest: 4,
+    })
+  })
+
+  it('does not increment the streak for the excused day itself', () => {
+    const habit = scheduledHabit(EVERY_DAY)
+    const checkins = checkinsOn(habit, ['2026-08-14', '2026-08-16'])
+    const days = excusedOn(habit, ['2026-08-15'])
+
+    // Two completions, one excused day in between: two, not three.
+    expect(scheduledStreak(habit, checkins, d('2026-08-16'), NY, days).current).toBe(2)
+  })
+
+  it('still breaks on a genuine miss next to an excused day', () => {
+    const habit = scheduledHabit(EVERY_DAY)
+    const checkins = checkinsOn(habit, ['2026-08-11', '2026-08-14'])
+    const days = excusedOn(habit, ['2026-08-12'])
+    // The 13th was due, not excused, and not done.
+    expect(scheduledStreak(habit, checkins, d('2026-08-14'), NY, days).current).toBe(1)
+  })
+
+  it('an excused today does not break a streak either', () => {
+    const habit = scheduledHabit(EVERY_DAY)
+    const checkins = checkinsOn(habit, ['2026-08-14', '2026-08-15'])
+    const days = excusedOn(habit, ['2026-08-16'])
+    expect(scheduledStreak(habit, checkins, d('2026-08-16'), NY, days).current).toBe(2)
+  })
+
+  it('behaves exactly as before when there are no excused days', () => {
+    const habit = scheduledHabit(WEEKDAYS_ONLY)
+    const checkins = checkinsOn(habit, ['2026-08-14', '2026-08-17', '2026-08-18'])
+    expect(scheduledStreak(habit, checkins, d('2026-08-18'), NY, []).current).toBe(3)
+  })
+})
+
+describe('avoidStreak', () => {
+  // Created well before the test window so the creation-date bound is not the thing
+  // under test here.
+  const early = { created_at: '2026-07-01T12:00:00Z' }
+
+  it('counts finished days with no lapse, and does not count today', () => {
+    // Aug 10..15 finished cleanly; the 16th is today and still going.
+    const habit = avoidHabit(EVERY_DAY, early)
+    const result = avoidStreak(habit, [], d('2026-08-16'), NY)
+
+    expect(result.stillGoingToday).toBe(true)
+    // Jul 1 .. Aug 15 inclusive is 46 finished days, all clean.
+    expect(result.current).toBe(46)
+  })
+
+  it('does not prematurely count today as a success', () => {
+    // The spec is explicit: 12 finished days plus an unfinished today is
+    // "12 days • still going", never 13.
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-08-04T12:00:00Z' })
+    const result = avoidStreak(habit, [], d('2026-08-16'), NY)
+
+    expect(result.current).toBe(12) // Aug 4..15
+    expect(result.stillGoingToday).toBe(true)
+  })
+
+  it('resets when a lapse is logged today', () => {
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-08-04T12:00:00Z' })
+    const result = avoidStreak(habit, lapsedOn(habit, ['2026-08-16']), d('2026-08-16'), NY)
+
+    expect(result.current).toBe(0)
+    expect(result.stillGoingToday).toBe(false)
+    expect(result.longest).toBe(12)
+  })
+
+  it('restarts after a lapse in the past', () => {
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-08-01T12:00:00Z' })
+    const result = avoidStreak(habit, lapsedOn(habit, ['2026-08-12']), d('2026-08-16'), NY)
+
+    expect(result.current).toBe(3) // 13, 14, 15 — today is still going
+    expect(result.longest).toBe(11) // Aug 1..11
+  })
+
+  it('treats an excused day as neutral', () => {
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-08-10T12:00:00Z' })
+    const days = excusedOn(habit, ['2026-08-13'])
+    const result = avoidStreak(habit, days, d('2026-08-16'), NY)
+
+    // Aug 10,11,12,14,15 are clean finished days; the 13th is neutral, not a break.
+    expect(result.current).toBe(5)
+  })
+
+  it('never counts days before the habit existed', () => {
+    // Without the creation-date bound this would report an enormous streak, because
+    // success is the absence of a record.
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-08-14T12:00:00Z' })
+    const result = avoidStreak(habit, [], d('2026-08-16'), NY)
+    expect(result.current).toBe(2) // the 14th and 15th only
+  })
+
+  it('skips unscheduled days without breaking the streak', () => {
+    const habit = avoidHabit(WEEKDAYS_ONLY, { created_at: '2026-08-03T12:00:00Z' })
+    // Mon 10th is today; the weekend was never scheduled.
+    const result = avoidStreak(habit, [], d('2026-08-10'), NY)
+    expect(result.current).toBe(5) // Aug 3..7, the previous working week
+    expect(result.stillGoingToday).toBe(true)
+  })
+
+  it('is not still going on an unscheduled day', () => {
+    const habit = avoidHabit(WEEKDAYS_ONLY, { created_at: '2026-08-03T12:00:00Z' })
+    const result = avoidStreak(habit, [], d('2026-08-16'), NY) // a Sunday
+    expect(result.stillGoingToday).toBe(false)
+  })
+
+  it('counts correctly across a DST transition', () => {
+    // US DST ends 2026-11-01, a 25-hour day.
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-10-28T12:00:00Z' })
+    const result = avoidStreak(habit, [], d('2026-11-03'), NY)
+    expect(result.current).toBe(6) // Oct 28..Nov 2
+  })
+
+  it('counts correctly across a year boundary', () => {
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-12-28T12:00:00Z' })
+    const result = avoidStreak(habit, [], d('2027-01-03'), NY)
+    expect(result.current).toBe(6) // Dec 28..Jan 2
+  })
+
+  it('is zero for a do-habit, which uses scheduledStreak instead', () => {
+    const habit = scheduledHabit(EVERY_DAY)
+    expect(avoidStreak(habit, [], d('2026-08-16'), NY)).toEqual({
+      current: 0,
+      longest: 0,
+      stillGoingToday: false,
+    })
+  })
+
+  it('and scheduledStreak is zero for an avoid habit', () => {
+    const habit = avoidHabit(EVERY_DAY, early)
+    expect(scheduledStreak(habit, [], d('2026-08-16'), NY)).toEqual({ current: 0, longest: 0 })
+  })
+
+  it('an at-risk marker alone does not affect the streak', () => {
+    const habit = avoidHabit(EVERY_DAY, { created_at: '2026-08-10T12:00:00Z' })
+    const days = [habitDay(habit, '2026-08-16', { at_risk_at: '2026-08-16T12:00:00Z' })]
+    expect(avoidStreak(habit, days, d('2026-08-16'), NY).current).toBe(6)
+  })
+})
+
 describe('recentWeeks', () => {
   const habit = weeklyHabit(3)
 
@@ -275,6 +432,21 @@ describe('summarizeRange', () => {
     expect(summarizeRange(habit, checkins, d('2026-08-16'), NY, 7)).toEqual({
       completed: 3,
       scheduled: 5,
+      excused: 0,
+      days: 7,
+    })
+  })
+
+  it('drops excused occurrences from the denominator', () => {
+    // Being ill on Wednesday should not make the week look worse than it was.
+    const habit = scheduledHabit(WEEKDAYS_ONLY)
+    const checkins = checkinsOn(habit, ['2026-08-10', '2026-08-11', '2026-08-14'])
+    const days = excusedOn(habit, ['2026-08-12'])
+
+    expect(summarizeRange(habit, checkins, d('2026-08-16'), NY, 7, days)).toEqual({
+      completed: 3,
+      scheduled: 4, // 5 weekdays minus the excused one
+      excused: 1,
       days: 7,
     })
   })
@@ -291,6 +463,7 @@ describe('summarizeRange', () => {
     expect(summarizeRange(habit, checkins, d('2026-08-16'), NY, 7)).toEqual({
       completed: 2,
       scheduled: 0,
+      excused: 0,
       days: 7,
     })
   })

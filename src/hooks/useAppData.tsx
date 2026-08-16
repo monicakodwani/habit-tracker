@@ -19,14 +19,26 @@ import {
   useState,
 } from 'react'
 import type { ReactNode } from 'react'
-import type { Checkin, Group, Habit, HabitDraft, LocalDate, Profile } from '../types/models'
+import type {
+  Checkin,
+  Group,
+  Habit,
+  HabitDay,
+  HabitDraft,
+  LocalDate,
+  Nudge,
+  Profile,
+} from '../types/models'
 import { addDays, endOfWeek, guessTimezone, safeZone, startOfWeek, todayIn } from '../domain/dates'
 import { describeError, supabase } from '../lib/supabase'
 import { ensureProfile, fetchGroupMembers, fetchMyGroup, fetchMyProfile } from '../services/groups'
 import type { ProfileUpdate } from '../services/groups'
 import { updateProfile as updateProfileRequest } from '../services/groups'
 import * as habitService from '../services/habits'
+import * as social from '../services/social'
 import { addCheckin, fetchCheckins, removeCheckin } from '../services/checkins'
+import { requestPushDelivery } from '../services/notifications'
+import { NUDGE_COOLDOWN_MS } from '../domain/nudges'
 import { useAuth } from './useAuth'
 import { useToast } from '../components/Toast'
 
@@ -55,6 +67,10 @@ interface AppDataValue {
   friends: Profile[]
   habits: Habit[]
   checkins: Checkin[]
+  /** Per-day state: grace, avoidance lapses and at-risk markers. */
+  habitDays: HabitDay[]
+  /** Nudges this user has sent inside the cooldown window, for availability checks. */
+  sentNudges: Nudge[]
 
   /** Today in the signed-in user's own timezone. Re-evaluated as the clock rolls over. */
   today: LocalDate
@@ -68,6 +84,13 @@ interface AppDataValue {
   setHabitActive: (habitId: string, active: boolean) => Promise<void>
   deleteHabit: (habitId: string) => Promise<void>
   updateProfile: (patch: ProfileUpdate) => Promise<void>
+
+  // --- social ---
+  sendNudge: (habit: Habit, message: string, preset: string | null) => Promise<void>
+  markAtRisk: (habit: Habit, note: string | null) => Promise<void>
+  clearAtRisk: (habit: Habit) => Promise<void>
+  setExcused: (habit: Habit, date: LocalDate, excused: boolean) => Promise<void>
+  setLapse: (habit: Habit, date: LocalDate, lapsed: boolean) => Promise<void>
 }
 
 const AppDataContext = createContext<AppDataValue | null>(null)
@@ -83,6 +106,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [members, setMembers] = useState<Profile[]>([])
   const [habits, setHabits] = useState<Habit[]>([])
   const [checkins, setCheckins] = useState<Checkin[]>([])
+  const [habitDays, setHabitDays] = useState<HabitDay[]>([])
+  const [sentNudges, setSentNudges] = useState<Nudge[]>([])
 
   const zone = safeZone(me?.timezone)
   const today = useToday(zone)
@@ -137,8 +162,21 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
         setMembers(groupMembers)
         setHabits(groupHabits)
-        setCheckins(await loadCheckins(groupHabits, user.id, safeZone(profile.timezone)))
+
+        const ownZone = safeZone(profile.timezone)
+        const [loadedCheckins, loadedDays, loadedNudges] = await Promise.all([
+          loadCheckins(groupHabits, user.id, ownZone),
+          loadHabitDays(groupHabits, user.id, ownZone),
+          social.fetchMyRecentNudges(
+            user.id,
+            new Date(Date.now() - NUDGE_COOLDOWN_MS).toISOString(),
+          ),
+        ])
         if (token !== loadToken.current) return
+
+        setCheckins(loadedCheckins)
+        setHabitDays(loadedDays)
+        setSentNudges(loadedNudges)
 
         setError(null)
         setStatus('ready')
@@ -159,6 +197,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       setMembers([])
       setHabits([])
       setCheckins([])
+      setHabitDays([])
+      setSentNudges([])
       setStatus('loading')
       setError(null)
       return
@@ -215,6 +255,160 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     [user, checkins, showToast],
   )
 
+  // --- Social actions -------------------------------------------------------
+
+  /**
+   * Patches one habit-day row in local state, creating it if absent.
+   *
+   * Returns the previous array so a caller can roll back after a failed write.
+   */
+  const patchDay = useCallback(
+    (habitId: string, userId: string, date: LocalDate, patch: Partial<HabitDay>) => {
+      setHabitDays((current) => {
+        const index = current.findIndex(
+          (d) => d.habit_id === habitId && d.day_date === date,
+        )
+        if (index >= 0) {
+          const next = [...current]
+          next[index] = { ...next[index]!, ...patch }
+          return next
+        }
+        return [
+          ...current,
+          {
+            id: `optimistic:${habitId}:${date}`,
+            habit_id: habitId,
+            user_id: userId,
+            day_date: date,
+            excused: false,
+            lapsed: false,
+            at_risk_at: null,
+            at_risk_note: null,
+            ...patch,
+          },
+        ]
+      })
+    },
+    [],
+  )
+
+  /**
+   * Sends a nudge.
+   *
+   * Not optimistic: every rule lives in the database, so pretending it succeeded
+   * would regularly be wrong. It is a single fast round trip and the sheet shows a
+   * pending state while it runs.
+   *
+   * Push delivery is requested afterwards and deliberately cannot fail the nudge —
+   * the nudge is already stored and visible in the app.
+   */
+  const sendNudge = useCallback(
+    async (habit: Habit, message: string, preset: string | null) => {
+      if (!user || !group) throw new Error('Not ready')
+      const id = await social.sendNudge(habit.id, message, preset)
+
+      setSentNudges((current) => [
+        {
+          id,
+          group_id: group.id,
+          habit_id: habit.id,
+          sender_id: user.id,
+          recipient_id: habit.owner_id,
+          day_date: today,
+          preset,
+          message,
+          created_at: new Date().toISOString(),
+        },
+        ...current,
+      ])
+
+      void requestPushDelivery('nudge', id)
+      void reload()
+    },
+    [user, group, today, reload],
+  )
+
+  const markAtRisk = useCallback(
+    async (habit: Habit, note: string | null) => {
+      if (!user) return
+      const previous = habitDays
+      patchDay(habit.id, user.id, today, {
+        at_risk_at: new Date().toISOString(),
+        at_risk_note: note,
+      })
+
+      try {
+        // The server decides the date, in the owner's timezone — which is what makes
+        // an at-risk marker expire correctly at that person's midnight.
+        const date = await social.markAtRisk(habit.id, note)
+        if (date !== today) {
+          setHabitDays(previous)
+          await reload()
+        }
+        void requestPushDelivery('at_risk', habit.id)
+      } catch (cause) {
+        setHabitDays(previous)
+        showToast(describeError(cause))
+      }
+    },
+    [user, habitDays, today, patchDay, reload, showToast],
+  )
+
+  const clearAtRisk = useCallback(
+    async (habit: Habit) => {
+      if (!user) return
+      const previous = habitDays
+      patchDay(habit.id, user.id, today, { at_risk_at: null, at_risk_note: null })
+
+      try {
+        await social.clearAtRisk(habit.id)
+      } catch (cause) {
+        setHabitDays(previous)
+        showToast(describeError(cause))
+      }
+    },
+    [user, habitDays, today, patchDay, showToast],
+  )
+
+  const setExcused = useCallback(
+    async (habit: Habit, date: LocalDate, excused: boolean) => {
+      if (!user) return
+      const previous = habitDays
+      // Excusing clears any lapse and any call for help, mirroring what set_excused does.
+      patchDay(habit.id, user.id, date, {
+        excused,
+        ...(excused ? { lapsed: false, at_risk_at: null, at_risk_note: null } : {}),
+      })
+
+      try {
+        await social.setExcused(habit.id, date, excused)
+      } catch (cause) {
+        setHabitDays(previous)
+        showToast(describeError(cause))
+      }
+    },
+    [user, habitDays, patchDay, showToast],
+  )
+
+  const setLapse = useCallback(
+    async (habit: Habit, date: LocalDate, lapsed: boolean) => {
+      if (!user) return
+      const previous = habitDays
+      patchDay(habit.id, user.id, date, {
+        lapsed,
+        ...(lapsed ? { excused: false, at_risk_at: null, at_risk_note: null } : {}),
+      })
+
+      try {
+        await social.setLapse(habit.id, date, lapsed)
+      } catch (cause) {
+        setHabitDays(previous)
+        showToast(describeError(cause))
+      }
+    },
+    [user, habitDays, patchDay, showToast],
+  )
+
   const createHabit = useCallback(
     async (draft: HabitDraft) => {
       if (!user || !group) throw new Error('Not ready')
@@ -240,6 +434,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     await habitService.deleteHabit(habitId)
     setHabits((current) => current.filter((h) => h.id !== habitId))
     setCheckins((current) => current.filter((c) => c.habit_id !== habitId))
+    setHabitDays((current) => current.filter((d) => d.habit_id !== habitId))
   }, [])
 
   const updateProfile = useCallback(
@@ -267,6 +462,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       friends,
       habits,
       checkins,
+      habitDays,
+      sentNudges,
       today,
       zone,
       reload,
@@ -276,11 +473,17 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       setHabitActive,
       deleteHabit,
       updateProfile,
+      sendNudge,
+      markAtRisk,
+      clearAtRisk,
+      setExcused,
+      setLapse,
     }),
     [
-      status, error, me, group, members, friends, habits, checkins, today, zone,
-      reload, toggleCheckin, createHabit, updateHabit, setHabitActive, deleteHabit,
-      updateProfile,
+      status, error, me, group, members, friends, habits, checkins, habitDays,
+      sentNudges, today, zone, reload, toggleCheckin, createHabit, updateHabit,
+      setHabitActive, deleteHabit, updateProfile, sendNudge, markAtRisk, clearAtRisk,
+      setExcused, setLapse,
     ],
   )
 
@@ -357,6 +560,35 @@ async function loadCheckins(
 }
 
 /**
+ * Day states, on the same two-depth principle as check-ins.
+ *
+ * Own habits get the long window because excused days feed into streaks; friends'
+ * habits only need the current week, padded by a day at each end so a friend in
+ * another timezone still has their whole local week covered.
+ */
+async function loadHabitDays(
+  habits: readonly Habit[],
+  userId: string,
+  zone: string,
+): Promise<HabitDay[]> {
+  const today = todayIn(zone)
+
+  const mine = habits.filter((h) => h.owner_id === userId).map((h) => h.id)
+  const theirs = habits.filter((h) => h.owner_id !== userId).map((h) => h.id)
+
+  const [own, friends] = await Promise.all([
+    social.fetchHabitDays(mine, addDays(today, -OWN_HISTORY_DAYS, zone), addDays(today, 1, zone)),
+    social.fetchHabitDays(
+      theirs,
+      addDays(startOfWeek(today, zone), -1, zone),
+      addDays(endOfWeek(today, zone), 1, zone),
+    ),
+  ])
+
+  return [...own, ...friends]
+}
+
+/**
  * Today's date in `zone`, kept current while the app is open.
  *
  * A phone left on the Today screen overnight, or a PWA resumed from the background
@@ -409,10 +641,16 @@ function useRealtimeRefresh(enabled: boolean, reload: () => Promise<void>) {
       timer = setTimeout(() => void reloadRef.current(), 1500)
     }
 
+    // Every social table that affects what Today and Activity show. All of them are
+    // just triggers to refetch; `push_subscriptions` is deliberately absent from the
+    // publication entirely, because its rows are secret material.
     const channel = supabase
       .channel('habits-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'habit_checkins' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'habits' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'habit_days' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_events' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'event_reactions' }, schedule)
       .subscribe()
 
     return () => {

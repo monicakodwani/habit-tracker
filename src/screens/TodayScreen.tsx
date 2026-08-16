@@ -1,31 +1,62 @@
 /**
  * Today — the screen the app exists for.
  *
- * Your habits at the top, with the only tappable controls in the app for completing
- * them. Your friends below, read-only. Nothing else.
+ * Your habits at the top, with the only tappable completion controls in the app.
+ * Your friends below, read-only apart from a nudge. Anyone asking for a push floats
+ * to the top of their own card.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppData } from '../hooks/useAppData'
-import { buildFriendsToday, buildPersonToday, isDone } from '../domain/status'
-import type { PersonToday } from '../domain/status'
+import {
+  buildFriendsToday,
+  buildPersonToday,
+  isDone,
+  prioritizeForFriendCard,
+} from '../domain/status'
+import type { HabitStatus, PersonToday } from '../domain/status'
 import { formatLongDate } from '../domain/dates'
 import { describeDailyProgress } from '../domain/recurrence'
+import { describeNudgeBlock, nudgeAvailability } from '../domain/nudges'
+import type { Habit, Profile } from '../types/models'
 import { Card, Screen, Section } from '../components/Layout'
 import { ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 import { FriendHabitRow, OwnHabitRow } from '../components/HabitRow'
+import { HabitActionSheet } from '../components/HabitActionSheet'
+import { NudgeSheet } from '../components/NudgeSheet'
+import { useToast } from '../components/Toast'
 
 export function TodayScreen() {
-  const { status, me, habits, checkins, friends, today, zone, toggleCheckin } = useAppData()
+  const {
+    status,
+    me,
+    habits,
+    checkins,
+    habitDays,
+    friends,
+    today,
+    zone,
+    sentNudges,
+    toggleCheckin,
+    markAtRisk,
+    clearAtRisk,
+    setExcused,
+    setLapse,
+    sendNudge,
+  } = useAppData()
+  const { showToast } = useToast()
+
+  const [actionsFor, setActionsFor] = useState<HabitStatus | null>(null)
+  const [nudgeTarget, setNudgeTarget] = useState<{ habit: Habit; person: Profile } | null>(null)
 
   const mine = useMemo(
-    () => (me ? buildPersonToday(me, habits, checkins, zone) : null),
-    [me, habits, checkins, zone],
+    () => (me ? buildPersonToday(me, habits, checkins, zone, undefined, habitDays) : null),
+    [me, habits, checkins, zone, habitDays],
   )
 
   const theirs = useMemo(
-    () => buildFriendsToday(friends, habits, checkins),
-    [friends, habits, checkins],
+    () => buildFriendsToday(friends, habits, checkins, undefined, habitDays),
+    [friends, habits, checkins, habitDays],
   )
 
   return (
@@ -49,9 +80,8 @@ export function TodayScreen() {
                   <OwnHabitRow
                     key={item.habit.id}
                     status={item}
-                    onToggle={() =>
-                      void toggleCheckin(item.habit, today, item.completedToday)
-                    }
+                    onToggle={() => void toggleCheckin(item.habit, today, item.completedToday)}
+                    onOpenActions={() => setActionsFor(item)}
                   />
                 ))}
               </ul>
@@ -67,10 +97,45 @@ export function TodayScreen() {
         <Section title="Your people">
           <div className="space-y-3">
             {theirs.map((person) => (
-              <FriendCard key={person.profile.id} person={person} />
+              <FriendCard
+                key={person.profile.id}
+                person={person}
+                viewerId={me?.id ?? ''}
+                sentNudges={sentNudges}
+                onNudge={(habit) => setNudgeTarget({ habit, person: person.profile })}
+              />
             ))}
           </div>
         </Section>
+      )}
+
+      {actionsFor && (
+        <HabitActionSheet
+          open
+          onClose={() => setActionsFor(null)}
+          status={actionsFor}
+          onComplete={() => void toggleCheckin(actionsFor.habit, today, false)}
+          onUndoComplete={() => void toggleCheckin(actionsFor.habit, today, true)}
+          onAtRisk={(note) => void markAtRisk(actionsFor.habit, note)}
+          onClearAtRisk={() => void clearAtRisk(actionsFor.habit)}
+          onExcuse={() => void setExcused(actionsFor.habit, today, true)}
+          onUnexcuse={() => void setExcused(actionsFor.habit, today, false)}
+          onLapse={() => void setLapse(actionsFor.habit, today, true)}
+          onUndoLapse={() => void setLapse(actionsFor.habit, today, false)}
+        />
+      )}
+
+      {nudgeTarget && (
+        <NudgeSheet
+          open
+          onClose={() => setNudgeTarget(null)}
+          habit={nudgeTarget.habit}
+          recipient={nudgeTarget.person}
+          onSend={async (message, preset) => {
+            await sendNudge(nudgeTarget.habit, message, preset)
+            showToast(`Nudged ${nudgeTarget.person.display_name} 👋`, 'info')
+          }}
+        />
       )}
     </Screen>
   )
@@ -78,12 +143,36 @@ export function TodayScreen() {
 
 /**
  * A friend's card is read-only by construction — it renders {@link FriendHabitRow},
- * which has no completion control at all. There is no disabled button to tap, so the
- * boundary reads as "this is theirs", not "you are not allowed".
+ * which has no completion control at all. There is no disabled tick box to tap, so
+ * the boundary reads as "this is theirs", not "you are not allowed".
  */
-function FriendCard({ person }: { person: PersonToday }) {
-  const { profile, items } = person
+function FriendCard({
+  person,
+  viewerId,
+  sentNudges,
+  onNudge,
+}: {
+  person: PersonToday
+  viewerId: string
+  sentNudges: ReturnType<typeof useAppData>['sentNudges']
+  onNudge: (habit: Habit) => void
+}) {
+  const { profile, items, date } = person
   const doneCount = items.filter(isDone).length
+  const ordered = useMemo(() => prioritizeForFriendCard(items), [items])
+
+  // The friend's own wall-clock time, for the "after a time" nudge policy. Derived
+  // from their timezone rather than the viewer's, which is the whole point.
+  const theirLocalTime = useMemo(
+    () =>
+      new Intl.DateTimeFormat('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: profile.timezone,
+      }).format(new Date()),
+    [profile.timezone],
+  )
 
   return (
     <Card className="px-4 py-3.5">
@@ -92,6 +181,11 @@ function FriendCard({ person }: { person: PersonToday }) {
           {profile.avatar_emoji}
         </span>
         <h3 className="flex-1 text-[0.95rem] font-semibold">{profile.display_name}</h3>
+        {person.atRiskCount > 0 && (
+          <span className="rounded-full bg-flame/15 px-2 py-0.5 text-[0.7rem] font-semibold text-flame">
+            Needs a push
+          </span>
+        )}
         {items.length > 0 && (
           <span className="text-[0.8rem] tabular-nums text-ink-faint">
             {doneCount}/{items.length}
@@ -105,9 +199,27 @@ function FriendCard({ person }: { person: PersonToday }) {
         </p>
       ) : (
         <ul>
-          {items.map((item) => (
-            <FriendHabitRow key={item.habit.id} status={item} />
-          ))}
+          {ordered.map((item) => {
+            const availability = nudgeAvailability(item.habit, {
+              viewerId,
+              ownerToday: date,
+              ownerZone: profile.timezone,
+              lookup: item.lookup,
+              checkins: item.checkins,
+              atRisk: item.atRisk,
+              sentNudges,
+              ownerLocalTime: theirLocalTime,
+            })
+
+            return (
+              <FriendHabitRow
+                key={item.habit.id}
+                status={item}
+                nudgeLabel={describeNudgeBlock(availability.reason)}
+                onNudge={availability.allowed ? () => onNudge(item.habit) : null}
+              />
+            )
+          })}
         </ul>
       )}
     </Card>

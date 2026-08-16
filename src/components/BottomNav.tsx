@@ -1,9 +1,8 @@
 /**
  * The tab bar.
  *
- * Three tabs, not four: Today, Week, Me. The Activity feed belongs to a later phase,
- * and an empty "coming later" tab would be a permanent piece of clutter in an app
- * this small.
+ * Four tabs now that Activity is real: Today, Week, Activity, Me. It was deliberately
+ * omitted while the feed was still a placeholder rather than shipped empty.
  */
 import { NavLink } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -41,6 +40,16 @@ const TABS: Tab[] = [
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6">
         <path d="M4 7h4v10H4zM10 7h4v10h-4zM16 7h4v10h-4z" {...stroke} />
+      </svg>
+    ),
+  },
+  {
+    to: '/activity',
+    label: 'Activity',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6">
+        <path d="M4 19V5a1 1 0 0 1 1-1h11l4 4v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Z" {...stroke} />
+        <path d="M8 11h8M8 15h5" {...stroke} />
       </svg>
     ),
   },
