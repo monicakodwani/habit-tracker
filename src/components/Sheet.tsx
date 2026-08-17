@@ -32,6 +32,23 @@ export function Sheet({ open, onClose, title, subtitle, children }: SheetProps) 
   const panelRef = useRef<HTMLDivElement>(null)
   const returnFocusTo = useRef<HTMLElement | null>(null)
 
+  /*
+   * `onClose` lives in a ref so the effect below can depend on `open` ALONE.
+   *
+   * This is not a micro-optimisation, it is the difference between the sheet working
+   * and not. Callers pass inline arrows and locally-declared functions, so `onClose`
+   * gets a fresh identity on every render of the parent. With `onClose` in the
+   * dependency array, typing a single character into a field inside the sheet
+   * re-rendered the parent, tore this effect down and set it up again — the cleanup
+   * moved focus back to the trigger and the setup moved it to the panel, so the field
+   * lost focus after every keystroke and the iOS keyboard dismissed itself.
+   *
+   * Focus and the scroll lock belong to the *open* transition, and now depend on
+   * exactly that.
+   */
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   const focusables = useCallback(
     () =>
       Array.from(
@@ -56,7 +73,7 @@ export function Sheet({ open, onClose, title, subtitle, children }: SheetProps) 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab') return
@@ -83,7 +100,10 @@ export function Sheet({ open, onClose, title, subtitle, children }: SheetProps) 
       document.body.style.overflow = previousOverflow
       returnFocusTo.current?.focus()
     }
-  }, [open, onClose, focusables])
+    // `open` only — see the note on onCloseRef. `focusables` is a stable useCallback
+    // and is read through the closure rather than re-subscribing this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   if (!open) return null
 

@@ -110,6 +110,8 @@ In the dashboard, open **SQL Editor → New query** and run every file in
    reactions, notification preferences, push subscriptions, and the RPCs.
 4. `20260817120000_daily_streak_aggregate.sql` — the group-visible daily streak
    aggregate. Functions only; no tables, no RLS changes.
+5. `20260817180000_neutral_timezone_default.sql` — stops defaulting new accounts to a
+   US timezone. Existing rows are deliberately untouched.
 
 Together these are the complete database. Running them on a fresh project is all the
 setup there is.

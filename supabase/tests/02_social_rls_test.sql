@@ -32,6 +32,16 @@ reset role;
  *
  * All fixture profiles use America/New_York, so one helper covers the whole file.
  */
+/*
+ * Pin every fixture profile to a known zone first.
+ *
+ * Previously this file assumed the profiles table's default. When that default changed
+ * from America/New_York to UTC, the helper below silently disagreed with the RPCs and
+ * a third of this suite failed. The suite now states the assumption instead of
+ * inheriting it, so a future default change cannot break it from a distance.
+ */
+update public.profiles set timezone = 'America/New_York';
+
 create or replace function fixture_today()
 returns date language sql stable as $fn$
   select (now() at time zone 'America/New_York')::date;

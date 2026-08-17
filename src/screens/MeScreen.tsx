@@ -17,9 +17,10 @@ import { Card, Columns, PageTitle, Screen, Section } from '../components/Layout'
 import { Button, ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 import { NotificationSettings } from '../components/NotificationSettings'
 import { DailyStreakStats } from '../components/DailyStreak'
+import { TimezonePrompt } from '../components/TimezonePrompt'
 
 export function MeScreen() {
-  const { status, me, group, habits, checkins, habitDays, today, zone, setHabitActive } =
+  const { status, me, group, habits, checkins, habitDays, today, zone, setHabitActive, updateProfile } =
     useAppData()
   const { signOut } = useAuth()
   const { showToast } = useToast()
@@ -101,6 +102,17 @@ export function MeScreen() {
             </Link>
           ) : (
             <ListSkeleton rows={1} />
+          )}
+
+          {/*
+            Sits directly under the profile card, where the timezone is already shown,
+            so the correction is next to the thing it corrects.
+          */}
+          {me && (
+            <TimezonePrompt
+              current={me.timezone}
+              onAccept={(tz) => updateProfile({ timezone: tz })}
+            />
           )}
         </Section>
 
