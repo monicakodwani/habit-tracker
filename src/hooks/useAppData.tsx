@@ -71,6 +71,13 @@ interface AppDataValue {
   habitDays: HabitDay[]
   /** Nudges this user has sent inside the cooldown window, for availability checks. */
   sentNudges: Nudge[]
+  /**
+   * Daily streaks for everyone in the group, keyed by user id.
+   *
+   * Server-computed: a person's true streak depends on their private habits, which
+   * this browser cannot read. Only numbers come back — never a habit.
+   */
+  groupStreaks: Map<string, social.GroupStreak>
 
   /** Today in the signed-in user's own timezone. Re-evaluated as the clock rolls over. */
   today: LocalDate
@@ -108,6 +115,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [checkins, setCheckins] = useState<Checkin[]>([])
   const [habitDays, setHabitDays] = useState<HabitDay[]>([])
   const [sentNudges, setSentNudges] = useState<Nudge[]>([])
+  const [groupStreaks, setGroupStreaks] = useState<Map<string, social.GroupStreak>>(new Map())
 
   const zone = safeZone(me?.timezone)
   const today = useToday(zone)
@@ -164,19 +172,23 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         setHabits(groupHabits)
 
         const ownZone = safeZone(profile.timezone)
-        const [loadedCheckins, loadedDays, loadedNudges] = await Promise.all([
+        const [loadedCheckins, loadedDays, loadedNudges, loadedStreaks] = await Promise.all([
           loadCheckins(groupHabits, user.id, ownZone),
           loadHabitDays(groupHabits, user.id, ownZone),
           social.fetchMyRecentNudges(
             user.id,
             new Date(Date.now() - NUDGE_COOLDOWN_MS).toISOString(),
           ),
+          // Never fatal: a failed aggregate just means no streak badges, not a broken
+          // screen. Everything else on Today works without it.
+          social.fetchGroupStreaks().catch(() => [] as social.GroupStreak[]),
         ])
         if (token !== loadToken.current) return
 
         setCheckins(loadedCheckins)
         setHabitDays(loadedDays)
         setSentNudges(loadedNudges)
+        setGroupStreaks(new Map(loadedStreaks.map((s) => [s.user_id, s])))
 
         setError(null)
         setStatus('ready')
@@ -199,6 +211,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       setCheckins([])
       setHabitDays([])
       setSentNudges([])
+      setGroupStreaks(new Map())
       setStatus('loading')
       setError(null)
       return
@@ -464,6 +477,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       checkins,
       habitDays,
       sentNudges,
+      groupStreaks,
       today,
       zone,
       reload,
@@ -481,7 +495,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     }),
     [
       status, error, me, group, members, friends, habits, checkins, habitDays,
-      sentNudges, today, zone, reload, toggleCheckin, createHabit, updateHabit,
+      sentNudges, groupStreaks, today, zone, reload, toggleCheckin, createHabit, updateHabit,
       setHabitActive, deleteHabit, updateProfile, sendNudge, markAtRisk, clearAtRisk,
       setExcused, setLapse,
     ],

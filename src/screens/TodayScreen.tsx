@@ -39,6 +39,7 @@ export function TodayScreen() {
     today,
     zone,
     sentNudges,
+    groupStreaks,
     toggleCheckin,
     markAtRisk,
     clearAtRisk,
@@ -136,6 +137,7 @@ export function TodayScreen() {
                   person={person}
                   viewerId={me?.id ?? ''}
                   sentNudges={sentNudges}
+                  streak={groupStreaks.get(person.profile.id)?.current_streak ?? 0}
                   onNudge={(habit) => setNudgeTarget({ habit, person: person.profile })}
                 />
               ))}
@@ -185,11 +187,19 @@ function FriendCard({
   person,
   viewerId,
   sentNudges,
+  streak,
   onNudge,
 }: {
   person: PersonToday
   viewerId: string
   sentNudges: ReturnType<typeof useAppData>['sentNudges']
+  /**
+   * Their daily streak, computed server-side.
+   *
+   * An aggregate and nothing more — it reflects their private habits too, but reveals
+   * none of them. See `group_daily_streaks()`.
+   */
+  streak: number
   onNudge: (habit: Habit) => void
 }) {
   const { profile, items, date } = person
@@ -215,7 +225,17 @@ function FriendCard({
         <span aria-hidden="true" className="text-xl leading-none">
           {profile.avatar_emoji}
         </span>
-        <h3 className="flex-1 text-[0.95rem] font-semibold">{profile.display_name}</h3>
+        <h3 className="min-w-0 flex-1 truncate text-[0.95rem] font-semibold">
+          {profile.display_name}
+        </h3>
+        {streak > 0 && (
+          <span className="shrink-0 text-[0.78rem] tabular-nums text-ink-faint">
+            <span aria-hidden="true">🔥</span>
+            <span className="sr-only">Daily streak: </span>
+            {streak}
+            <span className="sr-only"> {streak === 1 ? 'day' : 'days'}</span>
+          </span>
+        )}
         {person.atRiskCount > 0 && (
           <span className="rounded-full bg-flame/15 px-2 py-0.5 text-[0.7rem] font-semibold text-flame">
             Needs a push

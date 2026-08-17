@@ -147,3 +147,25 @@ export async function setLapse(
   })
   if (error) throw error
 }
+
+/** A group member's daily streak, as returned by the server-side aggregate. */
+export interface GroupStreak {
+  user_id: string
+  current_streak: number
+  longest_streak: number
+}
+
+/**
+ * Daily streaks for everyone in the caller's group.
+ *
+ * Computed by `group_daily_streaks()` rather than in the browser, because a person's
+ * true streak depends on their PRIVATE habits — which the viewer cannot read, and must
+ * not. The function runs with the rows visible, returns only a user id and two
+ * numbers, and derives whose streaks to compute from `auth.uid()`, so a caller cannot
+ * ask about someone outside their group.
+ */
+export async function fetchGroupStreaks(): Promise<GroupStreak[]> {
+  const { data, error } = await supabase.rpc('group_daily_streaks')
+  if (error) throw error
+  return (data ?? []) as GroupStreak[]
+}

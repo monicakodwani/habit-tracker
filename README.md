@@ -108,6 +108,8 @@ In the dashboard, open **SQL Editor → New query** and run every file in
    profile before joining a group.
 3. `20260817000000_social.sql` — avoidance habits, day states, nudges, activity feed,
    reactions, notification preferences, push subscriptions, and the RPCs.
+4. `20260817120000_daily_streak_aggregate.sql` — the group-visible daily streak
+   aggregate. Functions only; no tables, no RLS changes.
 
 Together these are the complete database. Running them on a fresh project is all the
 setup there is.
@@ -564,19 +566,36 @@ and was not judged worth it for three people.
 
 ### Where it appears
 
-- **Today** — one compact line under the date
+- **Today** — one compact line under the date, and a `🔥 n` badge on each friend's card
 - **Me** — current and longest
 
 Deliberately **not** on habit detail, which keeps showing that habit's own streak.
 
-### Why friends don't see it
+### Friends see the number, and only the number
 
-A friend's true combined streak depends on their *private* habits, which the viewer
-cannot read. Computing one in the browser from visible shared habits would produce a
-confidently wrong number, and computing it correctly would mean exposing private state.
-So the daily streak is the owner's own. Exposing it socially would need a server-side
-aggregate that returns only a number; that is a deliberate future choice, not an
-oversight.
+A person's true streak depends on their *private* habits. Computing a friend's streak
+in the browser could only use their **shared** habits, which would be confidently
+wrong — so it is computed on the server, where all the rows are readable, and only an
+aggregate comes back.
+
+`group_daily_streaks()` returns one row per group member: a user id, a current streak
+and a longest streak. No habit name, no habit id, no habit count, no day breakdown, and
+nothing distinguishing a private habit from a shared one. It takes **no arguments** —
+the set of people it reports on is derived from `auth.uid()`, so a caller cannot ask
+about someone outside their own group. The two helpers it is built from take a user id
+and are deliberately not granted to anyone.
+
+**What the number does disclose, deliberately.** If somebody's streak breaks on a day
+when all their *shared* habits were done, a friend can infer that something private went
+unhandled. That is inherent to any accurate aggregate over private data, and it is the
+point of the feature — three friends who have chosen to show each other a streak. It is
+documented rather than hidden. Nothing beyond that leaks: the RLS suite asserts that a
+private habit genuinely moves the number while remaining completely unreachable.
+
+**Two implementations, kept in step.** The owner's own streak is computed in the
+browser so it updates the instant a habit is ticked; friends' streaks come from the
+server. The semantics are mirrored, and the same scenarios are asserted in both the
+TypeScript unit tests and the RLS suite so they cannot drift apart silently.
 
 ## Security model
 

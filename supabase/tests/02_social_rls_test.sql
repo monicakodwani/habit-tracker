@@ -566,6 +566,106 @@ select assert_eq(
    where pubname = 'supabase_realtime' and tablename = 'push_subscriptions'), 0,
   'push_subscriptions is NOT in the realtime publication');
 
+
+-- ============================================================================
+-- group_daily_streaks — the aggregate friends are allowed to see
+--
+-- The feature's whole justification is that a person's true streak depends on their
+-- PRIVATE habits, which a friend cannot read. So these assert two things together:
+-- the number is accurate (private habits really do move it) and the private habit
+-- itself remains completely unreachable.
+-- ============================================================================
+
+reset role;
+
+-- Clean slate, then a deterministic history for Monica in her own timezone.
+delete from public.habit_checkins;
+delete from public.habit_days;
+
+-- Monica keeps: Vitamins (shared, daily) and Therapy (PRIVATE, daily).
+update public.habits set scheduled_days = '{1,2,3,4,5,6,7}'
+where id in ('c1111111-0000-0000-0000-000000000001', 'c1111111-0000-0000-0000-000000000002');
+-- Park everything else out of the way so the arithmetic is unambiguous.
+update public.habits set active = false, updated_at = now() - interval '365 days'
+where owner_id = '11111111-1111-1111-1111-111111111111'
+  and id not in ('c1111111-0000-0000-0000-000000000001', 'c1111111-0000-0000-0000-000000000002');
+update public.habits set created_at = now() - interval '30 days'
+where id in ('c1111111-0000-0000-0000-000000000001', 'c1111111-0000-0000-0000-000000000002');
+
+-- Both habits completed on each of the last three finished days.
+insert into public.habit_checkins (habit_id, user_id, completion_date)
+select h.id, h.owner_id, d::date
+from public.habits h
+cross join generate_series(fixture_today() - 3, fixture_today() - 1, interval '1 day') d
+where h.id in ('c1111111-0000-0000-0000-000000000001', 'c1111111-0000-0000-0000-000000000002');
+
+set role authenticated;
+select act_as('22222222-2222-2222-2222-222222222222');   -- Ura, a friend
+
+select assert_eq(
+  (select current_streak from public.group_daily_streaks()
+    where user_id = '11111111-1111-1111-1111-111111111111'),
+  3, 'a friend can read the aggregate streak');
+
+-- Now remove ONE private completion. The number must move — that is what makes the
+-- aggregate honest rather than a shared-habits-only approximation.
+reset role;
+delete from public.habit_checkins
+where habit_id = 'c1111111-0000-0000-0000-000000000002'
+  and completion_date = fixture_today() - 2;
+
+set role authenticated;
+select act_as('22222222-2222-2222-2222-222222222222');
+
+select assert_eq(
+  (select current_streak from public.group_daily_streaks()
+    where user_id = '11111111-1111-1111-1111-111111111111'),
+  1, 'a PRIVATE habit genuinely affects the aggregate a friend sees');
+
+-- ...while the private habit itself stays entirely unreachable.
+select assert_eq(
+  (select count(*)::int from public.habits
+    where id = 'c1111111-0000-0000-0000-000000000002'), 0,
+  'and the private habit is still invisible to that friend');
+select assert_eq(
+  (select count(*)::int from public.habit_checkins
+    where habit_id = 'c1111111-0000-0000-0000-000000000002'), 0,
+  'and its check-ins are still invisible');
+
+-- The aggregate returns numbers only — no habit id, name, or count of any kind.
+select assert_eq(
+  (select count(*)::int from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'group_daily_streaks'), 0,
+  'the aggregate is a function, not a table anyone can select columns from');
+
+-- Scope: only people the caller shares a group with.
+select assert_eq((select count(*)::int from public.group_daily_streaks()), 3,
+  'a member sees exactly their own group''s three people');
+
+select act_as('99999999-9999-9999-9999-999999999999');   -- Zed, different group
+select assert_eq(
+  (select count(*)::int from public.group_daily_streaks()
+    where user_id = '11111111-1111-1111-1111-111111111111'), 0,
+  'an unrelated account gets no row for someone in another group');
+select assert_eq((select count(*)::int from public.group_daily_streaks()), 1,
+  'an unrelated account sees only themselves');
+
+select act_as('44444444-4444-4444-4444-444444444444');   -- Nova, in no group
+select assert_eq((select count(*)::int from public.group_daily_streaks()), 0,
+  'a group-less account gets an empty aggregate');
+
+-- The helpers take an arbitrary user id, so they are deliberately not granted. Only
+-- the entry point that derives its subjects from auth.uid() is callable.
+select assert_raises(
+  $$select * from public.daily_streak_for('11111111-1111-1111-1111-111111111111')$$,
+  'permission denied',
+  'an authenticated user cannot compute a streak for an arbitrary person');
+select assert_raises(
+  $$select * from public.daily_status_days('11111111-1111-1111-1111-111111111111')$$,
+  'permission denied',
+  'nor read anyone''s per-day breakdown, which would reveal private habit days');
+
 -- ============================================================================
 -- anon — no valid JWT
 -- ============================================================================
@@ -600,6 +700,10 @@ select assert_raises(
   $$select public.owner_today('c1111111-0000-0000-0000-000000000001')$$,
   'permission denied',
   'anon cannot call the internal timezone helper');
+select assert_raises(
+  $$select * from public.group_daily_streaks()$$,
+  'permission denied',
+  'anon cannot read the daily streak aggregate');
 
 -- Even an authenticated user has no business calling the internal helpers directly:
 -- owner_local_time would leak a friend's wall-clock time.
