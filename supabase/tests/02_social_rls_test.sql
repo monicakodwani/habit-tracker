@@ -21,6 +21,23 @@
 
 reset role;
 
+/*
+ * The fixture users' local "today", used throughout instead of `current_date`.
+ *
+ * The RPCs under test derive today from the habit owner's timezone — that is the
+ * behaviour being tested — whereas `current_date` is the server's UTC date. Between
+ * UTC midnight and 04:00 the two disagree, so every assertion that sets up "a
+ * check-in for today" or "an excuse for today" would silently target the wrong day
+ * and fail. This suite really did pass all day and fail after midnight UTC.
+ *
+ * All fixture profiles use America/New_York, so one helper covers the whole file.
+ */
+create or replace function fixture_today()
+returns date language sql stable as $fn$
+  select (now() at time zone 'America/New_York')::date;
+$fn$;
+
+
 -- Deterministic ids for the rows created below.
 \set MONICA '''11111111-1111-1111-1111-111111111111'''
 \set URA    '''22222222-2222-2222-2222-222222222222'''
@@ -66,13 +83,13 @@ select assert_raises(
 
 select assert_raises(
   $$insert into public.habit_days (habit_id, user_id, day_date, excused, lapsed)
-    values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', current_date, true, true)$$,
+    values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', fixture_today(), true, true)$$,
   'habit_days_excused_xor_lapsed',
   'a day cannot be both excused and a lapse');
 
 select assert_raises(
   $$insert into public.habit_days (habit_id, user_id, day_date)
-    values ('c1111111-0000-0000-0000-000000000001','22222222-2222-2222-2222-222222222222', current_date)$$,
+    values ('c1111111-0000-0000-0000-000000000001','22222222-2222-2222-2222-222222222222', fixture_today())$$,
   'habit_days_habit_owner_fkey|foreign key',
   'a day state cannot be attributed to a non-owner');
 
@@ -95,7 +112,7 @@ values
 
 -- Make Vitamins due today so nudges are possible, and clear prior state.
 update public.habits set scheduled_days = '{1,2,3,4,5,6,7}' where id = 'c1111111-0000-0000-0000-000000000001';
-delete from public.habit_checkins where habit_id = 'c1111111-0000-0000-0000-000000000001' and completion_date = current_date;
+delete from public.habit_checkins where habit_id = 'c1111111-0000-0000-0000-000000000001' and completion_date = fixture_today();
 delete from public.nudges;
 delete from public.activity_events;
 delete from public.habit_days;
@@ -172,14 +189,14 @@ select assert_raises(
   $$insert into public.nudges (group_id, habit_id, sender_id, recipient_id, day_date, message)
     values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','c1111111-0000-0000-0000-000000000001',
             '22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111',
-            current_date,'forged')$$,
+            fixture_today(),'forged')$$,
   'permission denied|row-level security',
   'nudges cannot be inserted directly, so a sender cannot be forged');
 
 -- A completed habit cannot be nudged.
 reset role;
 insert into public.habit_checkins (habit_id, user_id, completion_date)
-values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', current_date);
+values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', fixture_today());
 set role authenticated;
 select act_as('33333333-3333-3333-3333-333333333333');
 select assert_raises(
@@ -187,7 +204,7 @@ select assert_raises(
   'Not allowed right now',
   'a completed habit cannot be nudged');
 reset role;
-delete from public.habit_checkins where habit_id = 'c1111111-0000-0000-0000-000000000001' and completion_date = current_date;
+delete from public.habit_checkins where habit_id = 'c1111111-0000-0000-0000-000000000001' and completion_date = fixture_today();
 
 -- Nudge policy: 'never'.
 update public.habits set nudge_policy = 'never' where id = 'c1111111-0000-0000-0000-000000000001';
@@ -237,14 +254,14 @@ where id = 'c1111111-0000-0000-0000-000000000001';
 -- An excused day cannot be nudged.
 set role authenticated;
 select act_as('11111111-1111-1111-1111-111111111111');
-select public.set_excused('c1111111-0000-0000-0000-000000000001', current_date, true);
+select public.set_excused('c1111111-0000-0000-0000-000000000001', fixture_today(), true);
 select act_as('33333333-3333-3333-3333-333333333333');
 select assert_raises(
   $$select public.send_nudge('c1111111-0000-0000-0000-000000000001', 'hi', null)$$,
   'Not allowed right now',
   'an excused day cannot be nudged');
 select act_as('11111111-1111-1111-1111-111111111111');
-select public.set_excused('c1111111-0000-0000-0000-000000000001', current_date, false);
+select public.set_excused('c1111111-0000-0000-0000-000000000001', fixture_today(), false);
 
 -- An avoidance habit: nudgeable while going, not after a slip.
 select act_as('33333333-3333-3333-3333-333333333333');
@@ -253,14 +270,14 @@ select assert_eq(
   true, 'an avoidance habit can be encouraged while the day is still going');
 
 select act_as('11111111-1111-1111-1111-111111111111');
-select public.set_lapse('d1111111-0000-0000-0000-000000000001', current_date, true);
+select public.set_lapse('d1111111-0000-0000-0000-000000000001', fixture_today(), true);
 select act_as('22222222-2222-2222-2222-222222222222');
 select assert_raises(
   $$select public.send_nudge('d1111111-0000-0000-0000-000000000001', 'ha', null)$$,
   'Not allowed right now',
   'nobody can pile on after a slip has been logged');
 select act_as('11111111-1111-1111-1111-111111111111');
-select public.set_lapse('d1111111-0000-0000-0000-000000000001', current_date, false);
+select public.set_lapse('d1111111-0000-0000-0000-000000000001', fixture_today(), false);
 
 -- ============================================================================
 -- habit_days — at risk, excused, lapses
@@ -269,22 +286,22 @@ select public.set_lapse('d1111111-0000-0000-0000-000000000001', current_date, fa
 select act_as('11111111-1111-1111-1111-111111111111');   -- Monica
 
 select assert_raises(
-  $$select public.set_lapse('c1111111-0000-0000-0000-000000000001', current_date, true)$$,
+  $$select public.set_lapse('c1111111-0000-0000-0000-000000000001', fixture_today(), true)$$,
   'Only avoidance habits',
   'a slip cannot be logged against a do-habit');
 
 select assert_raises(
-  $$select public.set_excused('c1111111-0000-0000-0000-000000000003', current_date, true)$$,
+  $$select public.set_excused('c1111111-0000-0000-0000-000000000003', fixture_today(), true)$$,
   'Only scheduled habits',
   'a weekly-target habit cannot have a per-day excuse');
 
 select assert_raises(
-  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', current_date + 5, true)$$,
+  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', fixture_today() + 5, true)$$,
   'out of range',
   'the future cannot be excused');
 
 select assert_raises(
-  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', current_date - 400, true)$$,
+  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', fixture_today() - 400, true)$$,
   'out of range',
   'the distant past cannot be excused');
 
@@ -295,11 +312,11 @@ select assert_raises(
   'Not allowed right now',
   'a friend cannot mark someone else''s habit at risk');
 select assert_raises(
-  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', current_date, true)$$,
+  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', fixture_today(), true)$$,
   'Not allowed right now',
   'a friend cannot excuse someone else''s day');
 select assert_raises(
-  $$select public.set_lapse('d1111111-0000-0000-0000-000000000001', current_date, true)$$,
+  $$select public.set_lapse('d1111111-0000-0000-0000-000000000001', fixture_today(), true)$$,
   'Not allowed right now',
   'a friend cannot log a slip on someone else''s habit');
 
@@ -313,7 +330,7 @@ select assert_eq(
 
 select assert_raises(
   $$insert into public.habit_days (habit_id, user_id, day_date, excused)
-    values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', current_date - 1, true)$$,
+    values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', fixture_today() - 1, true)$$,
   'row-level security',
   'a friend cannot insert a day state for someone else');
 
@@ -321,11 +338,11 @@ select assert_raises(
 reset role;
 delete from public.habit_days;
 insert into public.habit_days (habit_id, user_id, day_date, at_risk_at, at_risk_note)
-values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', current_date, now(), 'shared note');
+values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', fixture_today(), now(), 'shared note');
 insert into public.habit_days (habit_id, user_id, day_date, excused)
-values ('c1111111-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111', current_date, true);  -- PRIVATE Therapy
+values ('c1111111-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111', fixture_today(), true);  -- PRIVATE Therapy
 insert into public.habit_days (habit_id, user_id, day_date, lapsed)
-values ('d1111111-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111', current_date, true);  -- PRIVATE avoidance
+values ('d1111111-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111', fixture_today(), true);  -- PRIVATE avoidance
 
 set role authenticated;
 select act_as('22222222-2222-2222-2222-222222222222');   -- Ura
@@ -358,9 +375,9 @@ reset role;
 delete from public.activity_events;
 -- A completion on a SHARED habit produces an event; a private one must not.
 insert into public.habit_checkins (habit_id, user_id, completion_date)
-values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', current_date - 1);
+values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', fixture_today() - 1);
 insert into public.habit_checkins (habit_id, user_id, completion_date)
-values ('c1111111-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111', current_date - 1);
+values ('c1111111-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111', fixture_today() - 1);
 
 select assert_eq((select count(*)::int from public.activity_events), 1,
   'only the shared completion produced an event');
@@ -370,14 +387,14 @@ select assert_eq(
 
 -- Undoing a completion retracts the event.
 delete from public.habit_checkins
-where habit_id = 'c1111111-0000-0000-0000-000000000001' and completion_date = current_date - 1;
+where habit_id = 'c1111111-0000-0000-0000-000000000001' and completion_date = fixture_today() - 1;
 select assert_eq((select count(*)::int from public.activity_events where type = 'habit_completed'), 0,
   'undoing a completion removes its event');
 
 -- Making a habit private wipes its social trail.
 reset role;
 insert into public.habit_checkins (habit_id, user_id, completion_date)
-values ('c2222222-0000-0000-0000-000000000001','22222222-2222-2222-2222-222222222222', current_date - 1);
+values ('c2222222-0000-0000-0000-000000000001','22222222-2222-2222-2222-222222222222', fixture_today() - 1);
 select assert_eq((select count(*)::int from public.activity_events where habit_id = 'c2222222-0000-0000-0000-000000000001'), 1,
   'Ura''s shared completion produced an event');
 update public.habits set visibility = 'private' where id = 'c2222222-0000-0000-0000-000000000001';
@@ -389,7 +406,7 @@ update public.habits set visibility = 'shared' where id = 'c2222222-0000-0000-00
 reset role;
 delete from public.activity_events;
 insert into public.habit_checkins (habit_id, user_id, completion_date)
-values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', current_date - 2);
+values ('c1111111-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111', fixture_today() - 2);
 
 set role authenticated;
 select act_as('22222222-2222-2222-2222-222222222222');
@@ -408,7 +425,7 @@ select assert_eq((select count(*)::int from public.activity_events), 0,
 select act_as('22222222-2222-2222-2222-222222222222');
 select assert_raises(
   $$insert into public.activity_events (group_id, actor_id, type, day_date)
-    values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','11111111-1111-1111-1111-111111111111','habit_completed', current_date)$$,
+    values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','11111111-1111-1111-1111-111111111111','habit_completed', fixture_today())$$,
   'permission denied|row-level security',
   'a user cannot forge an activity event or its actor');
 
@@ -572,11 +589,11 @@ select assert_raises(
   'permission denied',
   'anon cannot call mark_at_risk');
 select assert_raises(
-  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', current_date, true)$$,
+  $$select public.set_excused('c1111111-0000-0000-0000-000000000001', fixture_today(), true)$$,
   'permission denied',
   'anon cannot call set_excused');
 select assert_raises(
-  $$select public.set_lapse('d1111111-0000-0000-0000-000000000001', current_date, true)$$,
+  $$select public.set_lapse('d1111111-0000-0000-0000-000000000001', fixture_today(), true)$$,
   'permission denied',
   'anon cannot call set_lapse');
 select assert_raises(

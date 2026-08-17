@@ -18,10 +18,12 @@ import type { HabitStatus, PersonToday } from '../domain/status'
 import { formatLongDate } from '../domain/dates'
 import { describeDailyProgress } from '../domain/recurrence'
 import { describeNudgeBlock, nudgeAvailability } from '../domain/nudges'
+import { summarizeDailyStreak } from '../domain/dailyStreak'
 import type { Habit, Profile } from '../types/models'
 import { Card, Columns, PageTitle, Screen, Section } from '../components/Layout'
 import { ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 import { FriendHabitRow, OwnHabitRow } from '../components/HabitRow'
+import { DailyStreakLine } from '../components/DailyStreak'
 import { HabitActionSheet } from '../components/HabitActionSheet'
 import { NudgeSheet } from '../components/NudgeSheet'
 import { useToast } from '../components/Toast'
@@ -59,9 +61,36 @@ export function TodayScreen() {
     [friends, habits, checkins, habitDays],
   )
 
+  /*
+   * The owner's own daily streak. Computed from their full loaded history, which
+   * includes their private habits — a combined streak that ignored them would not be
+   * the person's real streak.
+   *
+   * Friends' streaks are deliberately NOT shown: computing one in this browser could
+   * only use their *shared* habits, which would be wrong, and computing it correctly
+   * would mean exposing private habit state. See the README.
+   */
+  const streak = useMemo(
+    () =>
+      me
+        ? summarizeDailyStreak(
+            habits.filter((h) => h.owner_id === me.id),
+            checkins,
+            habitDays,
+            today,
+            zone,
+          )
+        : null,
+    [me, habits, checkins, habitDays, today, zone],
+  )
+
   return (
     <Screen>
       <PageTitle>{formatLongDate(today, zone)}</PageTitle>
+
+      {status === 'ready' && streak && (
+        <DailyStreakLine current={streak.current} today={streak.today} />
+      )}
 
       {/*
         Stacked on a phone exactly as before — You, then Your people. On desktop the

@@ -28,6 +28,7 @@ custom server.
 - [Responsive layout](#responsive-layout)
 - [Architecture](#architecture)
 - [Semantics that are easy to get wrong](#semantics-that-are-easy-to-get-wrong)
+- [Daily streak](#daily-streak)
 - [Security model](#security-model)
 - [Design decisions](#design-decisions)
 - [If push stops arriving](#if-push-stops-arriving)
@@ -493,6 +494,89 @@ Every policy refusal reports the same opaque reason, so a friend cannot read the
 interface to learn someone's settings.
 
 ---
+
+## Daily streak
+
+A second, separate metric: consecutive local days on which you handled everything that
+actually mattered that day. It sits alongside the per-habit streaks — "Read 🔥 12 days"
+and "Daily streak 🔥 6 days" are different things, and neither replaces the other.
+
+**Derived, never stored.** There is no counter column and no cron job. Every number is
+recomputed from habits, check-ins and day states, so correcting last Tuesday — adding a
+forgotten check-in, granting an excuse, undoing a slip — updates it immediately with no
+possibility of a stored value drifting out of line with the history.
+
+### What counts
+
+| | Counts toward a day? |
+| --- | --- |
+| Scheduled `do` habit, on a day it is due | **Yes** |
+| Scheduled `avoid` habit, on a day it is scheduled | **Yes** |
+| Weekly-target habit | **No** — not due on any particular date |
+| A day the habit was not scheduled | No |
+| Days before the habit was created | No |
+
+Private habits count for their owner. A combined streak that ignored them would not be
+that person's real streak.
+
+### How a day is judged
+
+- **successful** — at least one habit applied, and every one was completed or excused
+- **failed** — at least one applicable habit was missed, or an avoidance habit slipped
+- **neutral** — nothing applied. A rest day neither earns credit nor breaks the run
+- **in progress** — the current local day, which is never finalised early
+
+An **excused** occurrence counts as *handled*. It earns the habit no completion credit,
+but it must not cost you the day — that is the entire point of grace.
+
+### The current day never counts early
+
+The streak only ever reports days that are over. If yesterday's run was 6 and today is
+going well, it shows `🔥 6-day daily streak · On track today` — not 7. Tomorrow it
+becomes 7.
+
+Two reasons: an avoidance habit is only won once the day *ends*, and a completion can
+still be undone before midnight. Waiting means the number only moves forward, which is
+what makes it worth trusting. A finished day still says `Everything done today ✓` — it
+just doesn't inflate the count.
+
+A slip or a miss today *is* definitive, so today can read as failed. The copy for that
+is `Start fresh tomorrow`; a missed habit is already visible on its own row and the
+combined metric has no business scolding anyone twice.
+
+### Neutral days are transparent
+
+Weekday-only habits mean the weekend has nothing scheduled. Friday success → Saturday
+neutral → Sunday neutral → Monday success continues one unbroken run. Empty days never
+manufacture credit either.
+
+### Archived habits
+
+An archived habit still counts for the days it was active, so retiring something does
+not quietly turn past failures into successes.
+
+**Limitation:** the schema records *that* a habit is archived, not *when*. `updated_at`
+is used as the archive date, which is exact for a habit archived and then left alone,
+and slightly too generous if it was edited afterwards. The alternatives are worse —
+ignoring archived habits rewrites history, counting them forever means retiring a habit
+silently breaks every day since. Adding archive-date tracking would need a migration
+and was not judged worth it for three people.
+
+### Where it appears
+
+- **Today** — one compact line under the date
+- **Me** — current and longest
+
+Deliberately **not** on habit detail, which keeps showing that habit's own streak.
+
+### Why friends don't see it
+
+A friend's true combined streak depends on their *private* habits, which the viewer
+cannot read. Computing one in the browser from visible shared habits would produce a
+confidently wrong number, and computing it correctly would mean exposing private state.
+So the daily streak is the owner's own. Exposing it socially would need a server-side
+aggregate that returns only a number; that is a deliberate future choice, not an
+oversight.
 
 ## Security model
 

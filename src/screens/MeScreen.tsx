@@ -10,14 +10,17 @@ import { useAppData } from '../hooks/useAppData'
 import { useAuth } from '../hooks/useAuth'
 import { useToast } from '../components/Toast'
 import { describeRecurrence } from '../domain/recurrence'
+import { summarizeDailyStreak } from '../domain/dailyStreak'
 import { describeError } from '../lib/supabase'
 import type { Habit } from '../types/models'
 import { Card, Columns, PageTitle, Screen, Section } from '../components/Layout'
 import { Button, ButtonLink, EmptyState, ListSkeleton } from '../components/ui'
 import { NotificationSettings } from '../components/NotificationSettings'
+import { DailyStreakStats } from '../components/DailyStreak'
 
 export function MeScreen() {
-  const { status, me, group, habits, setHabitActive } = useAppData()
+  const { status, me, group, habits, checkins, habitDays, today, zone, setHabitActive } =
+    useAppData()
   const { signOut } = useAuth()
   const { showToast } = useToast()
   const [showArchived, setShowArchived] = useState(false)
@@ -32,6 +35,22 @@ export function MeScreen() {
       archived: mine.filter((h) => !h.active),
     }
   }, [habits, me?.id])
+
+  // Includes archived habits on purpose: they still count for the days they were
+  // active, so dropping them here would quietly rewrite past days as successful.
+  const streak = useMemo(
+    () =>
+      me
+        ? summarizeDailyStreak(
+            habits.filter((h) => h.owner_id === me.id),
+            checkins,
+            habitDays,
+            today,
+            zone,
+          )
+        : null,
+    [me, habits, checkins, habitDays, today, zone],
+  )
 
   async function toggleArchive(habit: Habit) {
     setBusyId(habit.id)
@@ -91,6 +110,17 @@ export function MeScreen() {
           </Section>
         )}
       </Columns>
+
+      {streak && (
+        <Section title="Daily streak">
+          <DailyStreakStats current={streak.current} longest={streak.longest} />
+          <p className="mt-3 px-1 text-[0.75rem] leading-relaxed text-ink-faint">
+            Days where you handled everything scheduled. Excused days count as handled;
+            days with nothing scheduled are skipped. Separate from each habit&rsquo;s own
+            streak.
+          </p>
+        </Section>
+      )}
 
       <Section
         title="Your habits"
